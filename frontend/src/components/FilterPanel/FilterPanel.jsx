@@ -11,6 +11,22 @@ const DAYS_OF_WEEK = [
   { value: 6, label: 'Sunday' }
 ]
 
+// Helper function to extract country from a location object (same as Dashboard)
+function extractCountry(loc) {
+  // Priority 1: Check in locationNameAddressDetails array
+  if (Array.isArray(loc.locationNameAddressDetails) && loc.locationNameAddressDetails.length > 0) {
+    const nameDetails = loc.locationNameAddressDetails[0]
+    if (nameDetails?.country) return nameDetails.country
+    if (nameDetails?.Country) return nameDetails.Country
+  }
+  
+  // Priority 2: Check direct country fields
+  if (loc.country) return loc.country
+  if (loc.Country) return loc.Country
+  
+  return null
+}
+
 // Helper function to extract state from a location object (same as Dashboard)
 function extractState(loc) {
   // Priority 1: Check in locationNameAddressDetails array (confirmed location)
@@ -45,12 +61,13 @@ function extractState(loc) {
   return null
 }
 
-export default function FilterPanel({ locations, vendors, states, distributionCenters, filters, onFiltersChange }) {
+export default function FilterPanel({ locations, vendors, countries, states, distributionCenters, dcToLocationCodes, filters, onFiltersChange }) {
   const [locationSearch, setLocationSearch] = useState('')
   const [vendorSearch, setVendorSearch] = useState('')
   
   // Track which filter sections are expanded (default: all collapsed)
   const [expandedSections, setExpandedSections] = useState({
+    countries: false,
     states: false,
     locations: false,
     vendors: false,
@@ -66,9 +83,56 @@ export default function FilterPanel({ locations, vendors, states, distributionCe
     }))
   }
 
-  // Filter locations by state first, then by search term
+  const toggleAllSections = () => {
+    // Check if any section is currently expanded
+    const anyExpanded = Object.values(expandedSections).some(expanded => expanded === true)
+    
+    // If any are expanded, collapse all; otherwise expand all
+    const newState = !anyExpanded
+    setExpandedSections({
+      countries: newState,
+      states: newState,
+      locations: newState,
+      vendors: newState,
+      distributionCenters: newState,
+      deliveryDays: newState,
+      orderingDays: newState
+    })
+  }
+
+  // Filter locations by country first, then state, then distribution centers, then by search term
   const filteredLocations = useMemo(() => {
+    // Build set of location codes that belong to selected distribution centers
+    const locationCodesInDCs = new Set()
+    if (filters.distributionCenters && filters.distributionCenters.length > 0 && dcToLocationCodes) {
+      filters.distributionCenters.forEach(dcName => {
+        const locationCodes = dcToLocationCodes.get(dcName)
+        if (locationCodes) {
+          locationCodes.forEach(code => locationCodesInDCs.add(code))
+        }
+      })
+    }
+
     return locations.filter(loc => {
+      // Exclude location with code "000000"
+      const locationCode = loc.code || loc.locationCode || loc.Code || loc.LocationCode || ''
+      if (locationCode === '000000') {
+        return false
+      }
+      
+      // Filter by country if countries are selected
+      if (filters.countries && filters.countries.length > 0) {
+        const locCountry = extractCountry(loc)
+        if (locCountry) {
+          const countryStr = typeof locCountry === 'string' ? locCountry.trim() : String(locCountry).trim()
+          if (!filters.countries.includes(countryStr)) {
+            return false // Exclude if country doesn't match
+          }
+        } else {
+          return false // Exclude if no country found and countries are filtered
+        }
+      }
+      
       // Filter by state if states are selected
       if (filters.states && filters.states.length > 0) {
         const locState = extractState(loc)
@@ -79,6 +143,13 @@ export default function FilterPanel({ locations, vendors, states, distributionCe
           }
         } else {
           return false // Exclude if no state found and states are filtered
+        }
+      }
+      
+      // Filter by distribution centers if distribution centers are selected
+      if (filters.distributionCenters && filters.distributionCenters.length > 0) {
+        if (!locationCodesInDCs.has(locationCode)) {
+          return false // Exclude if location code is not in selected distribution centers
         }
       }
       
@@ -98,15 +169,31 @@ export default function FilterPanel({ locations, vendors, states, distributionCe
       const code = (loc.code || loc.locationCode || loc.Code || '').toString().toLowerCase()
       return name.includes(searchLower) || code.includes(searchLower)
     })
-  }, [locations, filters.states, locationSearch])
+  }, [locations, filters.countries, filters.states, filters.distributionCenters, dcToLocationCodes, locationSearch])
 
-  const filteredVendors = vendors.filter(v => {
-    if (!vendorSearch) return true
-    const searchLower = vendorSearch.toLowerCase()
-    const name = (v.name || v.vendorName || v.Name || v.description || v.Description || '').toLowerCase()
-    const code = (v.code || v.vendorCode || v.Code || '').toLowerCase()
-    return name.includes(searchLower) || code.includes(searchLower)
-  })
+  const filteredVendors = useMemo(() => {
+    return vendors.filter(v => {
+      // Filter by country if countries are selected
+      if (filters.countries && filters.countries.length > 0) {
+        const vendorCountry = v.countryName || v.country || v.Country || v.CountryName || ''
+        if (vendorCountry) {
+          const countryStr = typeof vendorCountry === 'string' ? vendorCountry.trim() : String(vendorCountry).trim()
+          if (!filters.countries.includes(countryStr)) {
+            return false // Exclude if country doesn't match
+          }
+        } else {
+          return false // Exclude if no country found and countries are filtered
+        }
+      }
+      
+      // Filter by search term
+      if (!vendorSearch) return true
+      const searchLower = vendorSearch.toLowerCase()
+      const name = (v.supplyName || v.name || v.vendorName || v.Name || v.description || v.Description || '').toLowerCase()
+      const code = (v.code || v.vendorCode || v.Code || v.supplyCode || '').toLowerCase()
+      return name.includes(searchLower) || code.includes(searchLower)
+    })
+  }, [vendors, filters.countries, vendorSearch])
 
   const handleMultiSelect = (filterKey, value, checked) => {
     const currentValues = filters[filterKey] || []
@@ -140,6 +227,7 @@ export default function FilterPanel({ locations, vendors, states, distributionCe
 
   const clearFilters = () => {
     onFiltersChange({
+      countries: [],
       locations: [],
       vendors: [],
       states: [],
@@ -156,6 +244,22 @@ export default function FilterPanel({ locations, vendors, states, distributionCe
     const filterValues = filters[filterKey] || []
     return Array.isArray(filterValues) ? filterValues.length : 0
   }
+
+  // Calculate the number of locations filtered by selected countries
+  const countryFilteredLocationCount = useMemo(() => {
+    if (!filters.countries || filters.countries.length === 0) {
+      return null // No country filter applied
+    }
+    
+    return locations.filter(loc => {
+      const locCountry = extractCountry(loc)
+      if (locCountry) {
+        const countryStr = typeof locCountry === 'string' ? locCountry.trim() : String(locCountry).trim()
+        return filters.countries.includes(countryStr)
+      }
+      return false
+    }).length
+  }, [locations, filters.countries])
 
   // Calculate the number of locations filtered by selected states
   const stateFilteredLocationCount = useMemo(() => {
@@ -176,11 +280,48 @@ export default function FilterPanel({ locations, vendors, states, distributionCe
   return (
     <div className="filter-panel">
       <div className="filter-panel-header">
-        <h2>Filters</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <h2>Filters</h2>
+          <button onClick={toggleAllSections} className="expand-collapse-all-btn" title={Object.values(expandedSections).some(expanded => expanded) ? 'Collapse All' : 'Expand All'}>
+            {Object.values(expandedSections).some(expanded => expanded) ? 'Collapse All' : 'Expand All'}
+          </button>
+        </div>
         {hasActiveFilters && (
           <button onClick={clearFilters} className="clear-filters-btn">
             Clear All
           </button>
+        )}
+      </div>
+
+      {/* Countries filter - at the top */}
+      <div className="filter-section">
+        <div className="filter-section-header" onClick={() => toggleSection('countries')}>
+          <div className="filter-section-title">
+            <h3>
+              Countries
+              {countryFilteredLocationCount !== null && (
+                <span className="filter-location-count"> ({countryFilteredLocationCount} location{countryFilteredLocationCount !== 1 ? 's' : ''})</span>
+              )}
+            </h3>
+            {getActiveFilterCount('countries') > 0 && (
+              <span className="filter-badge">{getActiveFilterCount('countries')}</span>
+            )}
+          </div>
+          <span className="filter-toggle-icon">{expandedSections.countries ? '▼' : '▶'}</span>
+        </div>
+        {expandedSections.countries && (
+          <div className="filter-checkbox-list">
+            {countries.map(country => (
+              <label key={country} className="filter-checkbox">
+                <input
+                  type="checkbox"
+                  checked={filters.countries.includes(country)}
+                  onChange={(e) => handleMultiSelect('countries', country, e.target.checked)}
+                />
+                <span>{country}</span>
+              </label>
+            ))}
+          </div>
         )}
       </div>
 
@@ -237,38 +378,43 @@ export default function FilterPanel({ locations, vendors, states, distributionCe
               className="filter-search"
             />
             <div className="filter-checkbox-list">
-              {filteredLocations.slice(0, 50).map((loc, index) => {
-                const locationCode = loc.code || loc.locationCode || loc.Code || loc.LocationCode || ''
-                
-                // Handle locationNameAddressDetails as array or object
-                let nameDetails = null
-                if (Array.isArray(loc.locationNameAddressDetails) && loc.locationNameAddressDetails.length > 0) {
-                  nameDetails = loc.locationNameAddressDetails[0]
-                } else if (Array.isArray(loc.LocationNameAddressDetails) && loc.LocationNameAddressDetails.length > 0) {
-                  nameDetails = loc.LocationNameAddressDetails[0]
-                } else if (loc.locationNameAddressDetails && typeof loc.locationNameAddressDetails === 'object') {
-                  nameDetails = loc.locationNameAddressDetails
-                } else if (loc.LocationNameAddressDetails && typeof loc.LocationNameAddressDetails === 'object') {
-                  nameDetails = loc.LocationNameAddressDetails
-                }
-                
-                // Try multiple variations of the locationName field
-                const locationName = (nameDetails?.locationName 
-                  || nameDetails?.LocationName 
-                  || nameDetails?.name
-                  || nameDetails?.Name
-                  || loc.name 
-                  || loc.locationName 
-                  || loc.LocationName
-                  || loc.Name 
-                  || loc.description 
-                  || loc.Description 
-                  || '').toString().trim()
-                
-                // Use locationName if it exists and is not empty, otherwise fall back to code
-                const displayText = (locationName && locationName.length > 0) ? locationName : locationCode
-                
-                return (
+              {filteredLocations
+                .map((loc, index) => {
+                  const locationCode = loc.code || loc.locationCode || loc.Code || loc.LocationCode || ''
+                  
+                  // Handle locationNameAddressDetails as array or object
+                  let nameDetails = null
+                  if (Array.isArray(loc.locationNameAddressDetails) && loc.locationNameAddressDetails.length > 0) {
+                    nameDetails = loc.locationNameAddressDetails[0]
+                  } else if (Array.isArray(loc.LocationNameAddressDetails) && loc.LocationNameAddressDetails.length > 0) {
+                    nameDetails = loc.LocationNameAddressDetails[0]
+                  } else if (loc.locationNameAddressDetails && typeof loc.locationNameAddressDetails === 'object') {
+                    nameDetails = loc.locationNameAddressDetails
+                  } else if (loc.LocationNameAddressDetails && typeof loc.LocationNameAddressDetails === 'object') {
+                    nameDetails = loc.LocationNameAddressDetails
+                  }
+                  
+                  // Try multiple variations of the locationName field
+                  const locationName = (nameDetails?.locationName 
+                    || nameDetails?.LocationName 
+                    || nameDetails?.name
+                    || nameDetails?.Name
+                    || loc.name 
+                    || loc.locationName 
+                    || loc.LocationName
+                    || loc.Name 
+                    || loc.description 
+                    || loc.Description 
+                    || '').toString().trim()
+                  
+                  // Use locationName if it exists and is not empty, otherwise fall back to code
+                  const displayText = (locationName && locationName.length > 0) ? locationName : locationCode
+                  
+                  return { loc, locationCode, displayText, index }
+                })
+                .sort((a, b) => a.displayText.localeCompare(b.displayText))
+                .slice(0, 50)
+                .map(({ loc, locationCode, displayText, index }) => (
                   <label key={locationCode || `location-${index}`} className="filter-checkbox">
                     <input
                       type="checkbox"
@@ -277,8 +423,7 @@ export default function FilterPanel({ locations, vendors, states, distributionCe
                     />
                     <span>{displayText}</span>
                   </label>
-                )
-              })}
+                ))}
               {filteredLocations.length > 50 && (
                 <p className="filter-note">Showing first 50 of {filteredLocations.length} locations</p>
               )}
@@ -308,11 +453,15 @@ export default function FilterPanel({ locations, vendors, states, distributionCe
               className="filter-search"
             />
             <div className="filter-checkbox-list">
-              {filteredVendors.map(vendor => {
-                const vendorCode = vendor.code || vendor.vendorCode || vendor.Code || ''
-                const vendorName = vendor.name || vendor.vendorName || vendor.Name || vendor.description || vendor.Description || ''
-                const displayText = vendorName || vendorCode || 'Unknown Vendor'
-                return (
+              {filteredVendors
+                .map(vendor => {
+                  const vendorCode = vendor.code || vendor.vendorCode || vendor.Code || vendor.supplyCode || ''
+                  const vendorName = vendor.supplyName || vendor.name || vendor.vendorName || vendor.Name || vendor.description || vendor.Description || ''
+                  const displayText = vendorName || vendorCode || 'Unknown Vendor'
+                  return { vendor, vendorCode, displayText }
+                })
+                .sort((a, b) => a.displayText.localeCompare(b.displayText))
+                .map(({ vendor, vendorCode, displayText }) => (
                   <label key={vendorCode} className="filter-checkbox">
                     <input
                       type="checkbox"
@@ -321,8 +470,7 @@ export default function FilterPanel({ locations, vendors, states, distributionCe
                     />
                     <span>{displayText}</span>
                   </label>
-                )
-              })}
+                ))}
             </div>
           </>
         )}

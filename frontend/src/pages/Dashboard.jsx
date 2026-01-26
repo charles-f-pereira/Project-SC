@@ -4,6 +4,22 @@ import ScheduleCalendar from '../components/ScheduleCalendar/ScheduleCalendar.js
 import client from '../api/client.js'
 import './Dashboard.css'
 
+// Helper function to extract country from a location object
+function extractCountry(loc) {
+  // Priority 1: Check in locationNameAddressDetails array
+  if (Array.isArray(loc.locationNameAddressDetails) && loc.locationNameAddressDetails.length > 0) {
+    const nameDetails = loc.locationNameAddressDetails[0]
+    if (nameDetails?.country) return nameDetails.country
+    if (nameDetails?.Country) return nameDetails.Country
+  }
+  
+  // Priority 2: Check direct country fields
+  if (loc.country) return loc.country
+  if (loc.Country) return loc.Country
+  
+  return null
+}
+
 // Helper function to extract state from a location object
 function extractState(loc) {
   // Priority 1: Check in locationNameAddressDetails array (confirmed location)
@@ -49,6 +65,7 @@ export default function Dashboard() {
 
   // Filter state
   const [filters, setFilters] = useState({
+    countries: [],
     locations: [],
     vendors: [],
     states: [],
@@ -64,51 +81,55 @@ export default function Dashboard() {
         setLoading(true)
         setError(null)
 
-        // Fetch all data in parallel
-        const [locationsRes, vendorsRes, hierarchyRes, schedulesRes, holidaysRes] = await Promise.all([
+        // Fetch locations and vendors first
+        const [locationsRes, vendorsRes] = await Promise.all([
           client.get('/api/locations', { params: { activeFlag: true } }).catch(() => ({ data: { data: [] } })),
-          client.get('/api/vendors').catch(() => ({ data: { data: [] } })),
-          client.get('/api/vendors/hierarchy').catch(() => ({ data: { data: [] } })),
+          client.get('/api/vendors', { params: { activeFlag: true } }).catch(() => ({ data: { data: [] } }))
+        ])
+
+        const locations = locationsRes.data.data || []
+        const vendors = vendorsRes.data.data || []
+
+        // Fetch hierarchy data for each vendor
+        // Each vendor may have a hierarchyType like "3-AU Supply Chain - PFD" where PFD is the supplyCode
+        const hierarchyPromises = vendors.map(vendor => {
+          const supplyCode = vendor.supplyCode || vendor.code || vendor.vendorCode || vendor.Code || ''
+          if (supplyCode) {
+            // Construct hierarchyType parameter (e.g., "3-AU Supply Chain - PFD")
+            const hierarchyType = `3-AU Supply Chain - ${supplyCode}`
+            return client.get('/api/vendors/hierarchy', { 
+              params: { hierarchyType: hierarchyType } 
+            }).catch(() => ({ data: { data: [] } }))
+          }
+          return Promise.resolve({ data: { data: [] } })
+        })
+
+        // Fetch all hierarchy data, schedules, and holidays in parallel
+        const [hierarchyResults, schedulesRes, holidaysRes] = await Promise.all([
+          Promise.all(hierarchyPromises),
           client.get('/api/schedules/vendor-locations').catch(() => ({ data: { data: [] } })),
           client.get('/api/holidays').catch(() => ({ data: { data: [] } }))
         ])
 
-        setLocations(locationsRes.data.data || [])
-        setVendors(vendorsRes.data.data || [])
-        setHierarchy(hierarchyRes.data.data || [])
+        // Combine all hierarchy results into a single array
+        const allHierarchyData = hierarchyResults.flatMap(res => res.data.data || [])
+
+        setLocations(locations)
+        setVendors(vendors)
+        setHierarchy(allHierarchyData)
         setSchedules(schedulesRes.data.data || [])
         setHolidays(holidaysRes.data.data || [])
         
-        // Debug: Log first location to see structure and find state field
-        if (locationsRes.data.data && locationsRes.data.data.length > 0) {
-          const firstLoc = locationsRes.data.data[0]
-          console.log('First location structure:', firstLoc)
-          console.log('All location keys:', Object.keys(firstLoc))
-          
-          // Handle locationNameAddressDetails as array or object
-          let nameDetails = null
-          if (Array.isArray(firstLoc.locationNameAddressDetails) && firstLoc.locationNameAddressDetails.length > 0) {
-            nameDetails = firstLoc.locationNameAddressDetails[0]
-            console.log('locationNameAddressDetails[0]:', nameDetails)
-          } else if (firstLoc.locationNameAddressDetails && typeof firstLoc.locationNameAddressDetails === 'object') {
-            nameDetails = firstLoc.locationNameAddressDetails
-          }
-          console.log('Location name:', nameDetails?.locationName)
-          
-          // Check all possible state fields
-          console.log('Checking state fields:')
-          console.log('  stateProvince:', firstLoc.stateProvince)
-          console.log('  state:', firstLoc.state)
-          console.log('  State:', firstLoc.State)
-          console.log('  stateCode:', firstLoc.stateCode)
-          console.log('  StateCode:', firstLoc.StateCode)
-          console.log('  stateProvinceCode:', firstLoc.stateProvinceCode)
-          
-          // Check if state is in locationDetailDetails array
-          if (Array.isArray(firstLoc.locationDetailDetails) && firstLoc.locationDetailDetails.length > 0) {
-            console.log('locationDetailDetails[0]:', firstLoc.locationDetailDetails[0])
-            console.log('  stateProvince in details:', firstLoc.locationDetailDetails[0]?.stateProvince)
-            console.log('  state in details:', firstLoc.locationDetailDetails[0]?.state)
+        // Debug: Log hierarchy data structure
+        if (allHierarchyData && allHierarchyData.length > 0) {
+          console.log('Hierarchy data sample:', allHierarchyData.slice(0, 5))
+          const level3Items = allHierarchyData.filter(item => item.levelNumber === 3 || item.levelNumber === '3')
+          console.log('Level 3 items count:', level3Items.length)
+          if (level3Items.length > 0) {
+            console.log('First level 3 item:', level3Items[0])
+            console.log('Level 3 item keys:', Object.keys(level3Items[0]))
+            console.log('parentLogicalName:', level3Items[0].parentLogicalName)
+            console.log('locationCode:', level3Items[0].locationCode)
           }
         }
       } catch (err) {
@@ -122,10 +143,42 @@ export default function Dashboard() {
     fetchData()
   }, [])
 
-  // Extract unique states from locations
+  // Extract unique countries from locations
+  const availableCountries = useMemo(() => {
+    const countries = new Set()
+    locations.forEach(loc => {
+      const country = extractCountry(loc)
+      if (country) {
+        const countryStr = typeof country === 'string' ? country.trim() : String(country).trim()
+        if (countryStr.length > 0) {
+          countries.add(countryStr)
+        }
+      }
+    })
+    
+    const countriesArray = Array.from(countries).sort()
+    console.log('Extracted countries:', countriesArray)
+    return countriesArray
+  }, [locations])
+
+  // Extract unique states from locations (filtered by selected countries if any)
   const availableStates = useMemo(() => {
     const states = new Set()
     locations.forEach(loc => {
+      // If countries are selected, only include states from those countries
+      if (filters.countries && filters.countries.length > 0) {
+        const locCountry = extractCountry(loc)
+        if (locCountry) {
+          const countryStr = typeof locCountry === 'string' ? locCountry.trim() : String(locCountry).trim()
+          if (!filters.countries.includes(countryStr)) {
+            return // Skip locations not in selected countries
+          }
+        } else {
+          return // Skip locations without country if countries are filtered
+        }
+      }
+      
+      // Extract state from location
       const state = extractState(loc)
       if (state) {
         const stateStr = typeof state === 'string' ? state.trim() : String(state).trim()
@@ -136,18 +189,40 @@ export default function Dashboard() {
     })
     
     const statesArray = Array.from(states).sort()
-    console.log('Extracted states:', statesArray)
+    console.log('Extracted states (filtered by countries):', statesArray)
     return statesArray
-  }, [locations])
+  }, [locations, filters.countries])
 
-  // Extract distribution centers from hierarchy
-  const availableDCs = useMemo(() => {
+  // Extract distribution centers from hierarchy (levelNumber: 3, use parentLogicalName)
+  // Also build a map of distribution center -> location codes for filtering
+  const { availableDCs, dcToLocationCodes } = useMemo(() => {
     const dcs = new Set()
+    const dcLocationMap = new Map() // Map of distribution center name -> Set of location codes
+    
     hierarchy.forEach(item => {
-      if (item.distributionCenterCode) dcs.add(item.distributionCenterCode)
-      if (item.dcCode) dcs.add(item.dcCode)
+      // Only process items with levelNumber: 3
+      if (item.levelNumber === 3 || item.levelNumber === '3') {
+        const dcName = item.parentLogicalName || item.distributionCenterCode || item.dcCode || ''
+        const locationCode = item.locationCode || item.LocationCode || item.code || item.Code || ''
+        
+        if (dcName) {
+          dcs.add(dcName)
+          
+          // Build mapping of DC to location codes
+          if (locationCode) {
+            if (!dcLocationMap.has(dcName)) {
+              dcLocationMap.set(dcName, new Set())
+            }
+            dcLocationMap.get(dcName).add(locationCode)
+          }
+        }
+      }
     })
-    return Array.from(dcs).sort()
+    
+    return {
+      availableDCs: Array.from(dcs).sort(),
+      dcToLocationCodes: dcLocationMap
+    }
   }, [hierarchy])
 
   // Filter schedules based on current filters
@@ -168,11 +243,38 @@ export default function Dashboard() {
       })
     }
 
+    // Distribution Centers filter (requires hierarchy lookup)
     if (filters.distributionCenters.length > 0) {
-      filtered = filtered.filter(s => 
-        filters.distributionCenters.includes(s.distributionCenterCode) ||
-        filters.distributionCenters.includes(s.dcCode)
-      )
+      const locationCodesInDCs = new Set()
+      filters.distributionCenters.forEach(dcName => {
+        const locationCodes = dcToLocationCodes.get(dcName)
+        if (locationCodes) {
+          locationCodes.forEach(code => locationCodesInDCs.add(code))
+        }
+      })
+      filtered = filtered.filter(s => {
+        const sCode = s.locationCode || s.LocationCode || s.code || s.Code
+        return locationCodesInDCs.has(sCode)
+      })
+    }
+
+    // Country filter (requires location lookup)
+    if (filters.countries.length > 0) {
+      const locationCodesInCountries = new Set()
+      locations.forEach(loc => {
+        const country = extractCountry(loc)
+        const code = loc.code || loc.locationCode || loc.Code
+        if (country) {
+          const countryStr = typeof country === 'string' ? country.trim() : String(country).trim()
+          if (countryStr.length > 0 && filters.countries.includes(countryStr)) {
+            locationCodesInCountries.add(code)
+          }
+        }
+      })
+      filtered = filtered.filter(s => {
+        const sCode = s.locationCode || s.LocationCode || s.code || s.Code
+        return locationCodesInCountries.has(sCode)
+      })
     }
 
     // State filter (requires location lookup)
@@ -198,7 +300,7 @@ export default function Dashboard() {
     // This requires understanding the schedule structure
 
     return filtered
-  }, [schedules, filters, locations])
+  }, [schedules, filters, locations, dcToLocationCodes])
 
   if (loading) {
     return (
@@ -223,8 +325,10 @@ export default function Dashboard() {
         <FilterPanel
           locations={locations}
           vendors={vendors}
+          countries={availableCountries}
           states={availableStates}
           distributionCenters={availableDCs}
+          dcToLocationCodes={dcToLocationCodes}
           filters={filters}
           onFiltersChange={setFilters}
         />
