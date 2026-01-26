@@ -1,0 +1,86 @@
+.schedule-calendar {
+  background: white;
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.calendar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.calendar-header h2 {
+  font-size: 1.25rem;
+  color: #2c3e50;
+}
+
+.calendar-legend {
+  display: flex;
+  gap: 1.5rem;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.legend-color {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+}
+
+.calendar-container {
+  width: 100%;
+}
+
+.calendar-empty {
+  text-align: center;
+  padding: 3rem;
+  color: #666;
+}
+
+/* Override react-big-calendar styles */
+.rbc-calendar {
+  font-family: inherit;
+}
+
+.rbc-header {
+  padding: 0.75rem 0.5rem;
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.rbc-today {
+  background-color: #e8f4f8;
+}
+
+.rbc-event {
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+
+.rbc-event-content {
+  font-size: 0.85rem;
+}
+
+@media (max-width: 768px) {
+  .calendar-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+  
+  .calendar-legend {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+}

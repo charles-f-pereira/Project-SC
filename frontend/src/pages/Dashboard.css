@@ -1,0 +1,31 @@
+.dashboard {
+  width: 100%;
+}
+
+.dashboard-content {
+  display: flex;
+  gap: 2rem;
+  align-items: flex-start;
+}
+
+.dashboard-calendar-section {
+  flex: 1;
+  min-width: 0;
+}
+
+.dashboard-loading,
+.dashboard-error {
+  text-align: center;
+  padding: 3rem;
+  color: #666;
+}
+
+.dashboard-error {
+  color: #d32f2f;
+}
+
+@media (max-width: 1024px) {
+  .dashboard-content {
+    flex-direction: column;
+  }
+}
