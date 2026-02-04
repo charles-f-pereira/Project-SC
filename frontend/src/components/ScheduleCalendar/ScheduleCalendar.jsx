@@ -4,7 +4,8 @@ import 'react-big-calendar/lib/css/react-big-calendar.css'
 import 'moment/locale/en-gb'
 import './ScheduleCalendar.css'
 
-moment.locale('en-gb')
+// Set Monday as first day of week (en-gb default, but explicit for clarity)
+moment.locale('en-gb', { week: { dow: 1 } })
 
 const localizer = momentLocalizer(moment)
 
@@ -25,12 +26,13 @@ export default function ScheduleCalendar({ schedules, holidays, filters }) {
     }
   })
 
-  // Mark holidays on calendar
-  const holidayEvents = holidays.map(holiday => {
-    const holidayDate = new Date(holiday.date)
+  // Mark holidays on calendar (handle date/Date and name/Name from API)
+  const holidayEvents = (holidays || []).map(holiday => {
+    const dateStr = holiday.date || holiday.Date || ''
+    const holidayDate = new Date(dateStr)
     return {
-      id: 'holiday-' + holiday.date,
-      title: holiday.name,
+      id: 'holiday-' + dateStr + '-' + (holiday.country || ''),
+      title: holiday.name || holiday.Name || 'Public Holiday',
       start: holidayDate,
       end: holidayDate,
       allDay: true,
@@ -84,6 +86,7 @@ export default function ScheduleCalendar({ schedules, holidays, filters }) {
           eventPropGetter={eventStyleGetter}
           defaultView="month"
           views={['month', 'week', 'day']}
+          culture="en-GB"
         />
       </div>
       {schedules.length === 0 && (

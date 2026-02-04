@@ -54,6 +54,14 @@ function extractState(loc) {
   return null
 }
 
+// Map display country names to API country codes for public holidays
+const COUNTRY_NAME_TO_CODE = {
+  'Australia': 'AU',
+  'United States': 'US',
+  'USA': 'US',
+  'United States of America': 'US'
+}
+
 export default function Dashboard() {
   const [locations, setLocations] = useState([])
   const [vendors, setVendors] = useState([])
@@ -61,6 +69,8 @@ export default function Dashboard() {
   const [schedules, setSchedules] = useState([])
   const [holidays, setHolidays] = useState([])
   const [loading, setLoading] = useState(true)
+  const [holidaysLoading, setHolidaysLoading] = useState(false)
+  const [holidaysError, setHolidaysError] = useState(null)
   const [error, setError] = useState(null)
 
   // Filter state
@@ -98,17 +108,16 @@ export default function Dashboard() {
             // Construct hierarchyType parameter (e.g., "3-AU Supply Chain - PFD")
             const hierarchyType = `3-AU Supply Chain - ${supplyCode}`
             return client.get('/api/vendors/hierarchy', { 
-              params: { hierarchyType: hierarchyType } 
+              params: { hierarchyType, levelNumber: 3 } 
             }).catch(() => ({ data: { data: [] } }))
           }
           return Promise.resolve({ data: { data: [] } })
         })
 
-        // Fetch all hierarchy data, schedules, and holidays in parallel
-        const [hierarchyResults, schedulesRes, holidaysRes] = await Promise.all([
+        // Fetch hierarchy data and schedules (holidays are fetched manually via "Fetch PH data" button)
+        const [hierarchyResults, schedulesRes] = await Promise.all([
           Promise.all(hierarchyPromises),
-          client.get('/api/schedules/vendor-locations').catch(() => ({ data: { data: [] } })),
-          client.get('/api/holidays').catch(() => ({ data: { data: [] } }))
+          client.get('/api/schedules/vendor-locations').catch(() => ({ data: { data: [] } }))
         ])
 
         // Combine all hierarchy results into a single array
@@ -118,7 +127,6 @@ export default function Dashboard() {
         setVendors(vendors)
         setHierarchy(allHierarchyData)
         setSchedules(schedulesRes.data.data || [])
-        setHolidays(holidaysRes.data.data || [])
         
         // Debug: Log hierarchy data structure
         if (allHierarchyData && allHierarchyData.length > 0) {
@@ -302,6 +310,35 @@ export default function Dashboard() {
     return filtered
   }, [schedules, filters, locations, dcToLocationCodes])
 
+  // Filter holidays by selected countries (show only holidays for selected countries)
+  const filteredHolidays = useMemo(() => {
+    if (!filters.countries || filters.countries.length === 0) {
+      return holidays
+    }
+    const codesForSelected = new Set()
+    filters.countries.forEach(name => {
+      const code = COUNTRY_NAME_TO_CODE[name] || name
+      if (code === 'AU' || code === 'US') codesForSelected.add(code)
+    })
+    if (codesForSelected.size === 0) return holidays
+    return holidays.filter(h => codesForSelected.has(h.country || (h.Country || '').toUpperCase()))
+  }, [holidays, filters.countries])
+
+  const fetchPublicHolidays = async () => {
+    try {
+      setHolidaysLoading(true)
+      setHolidaysError(null)
+      const res = await client.get('/api/holidays/fetch', { params: { countries: 'AU,US' } })
+      const data = res.data?.data || []
+      setHolidays(data)
+    } catch (err) {
+      console.error('Error fetching public holidays:', err)
+      setHolidaysError(err.response?.data?.detail || err.message || 'Failed to fetch public holidays')
+    } finally {
+      setHolidaysLoading(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="dashboard-loading">
@@ -333,9 +370,22 @@ export default function Dashboard() {
           onFiltersChange={setFilters}
         />
         <div className="dashboard-calendar-section">
+          <div className="calendar-actions">
+            <button
+              onClick={fetchPublicHolidays}
+              disabled={holidaysLoading}
+              className="fetch-ph-btn"
+              title="Fetch public holidays for Australia and USA"
+            >
+              {holidaysLoading ? 'Fetching...' : 'Fetch PH data'}
+            </button>
+            {holidaysError && (
+              <span className="holidays-error">{holidaysError}</span>
+            )}
+          </div>
           <ScheduleCalendar
             schedules={filteredSchedules}
-            holidays={holidays}
+            holidays={filteredHolidays}
             filters={filters}
           />
         </div>

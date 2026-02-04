@@ -277,6 +277,22 @@ export default function FilterPanel({ locations, vendors, countries, states, dis
     }).length
   }, [locations, filters.states])
 
+  // Calculate the number of locations filtered by selected distribution centers
+  const dcFilteredLocationCount = useMemo(() => {
+    if (!filters.distributionCenters || filters.distributionCenters.length === 0 || !dcToLocationCodes) {
+      return null // No DC filter applied
+    }
+    const locationCodesInDCs = new Set()
+    filters.distributionCenters.forEach(dcName => {
+      const codes = dcToLocationCodes.get(dcName)
+      if (codes) codes.forEach(code => locationCodesInDCs.add(code))
+    })
+    return locations.filter(loc => {
+      const code = loc.code || loc.locationCode || loc.Code || loc.LocationCode || ''
+      return locationCodesInDCs.has(code)
+    }).length
+  }, [locations, filters.distributionCenters, dcToLocationCodes])
+
   return (
     <div className="filter-panel">
       <div className="filter-panel-header">
@@ -476,11 +492,16 @@ export default function FilterPanel({ locations, vendors, countries, states, dis
         )}
       </div>
 
-      {/* Distribution Centers filter */}
+      {/* Distribution Centers filter - when selected, locations filter by DC via locationCode */}
       <div className="filter-section">
         <div className="filter-section-header" onClick={() => toggleSection('distributionCenters')}>
           <div className="filter-section-title">
-            <h3>Distribution Centers</h3>
+            <h3>
+              Distribution Centers
+              {dcFilteredLocationCount !== null && (
+                <span className="filter-location-count"> ({dcFilteredLocationCount} location{dcFilteredLocationCount !== 1 ? 's' : ''})</span>
+              )}
+            </h3>
             {getActiveFilterCount('distributionCenters') > 0 && (
               <span className="filter-badge">{getActiveFilterCount('distributionCenters')}</span>
             )}

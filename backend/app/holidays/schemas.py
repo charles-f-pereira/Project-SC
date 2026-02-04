@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import date
 
 
@@ -12,6 +12,12 @@ class PublicHoliday(BaseModel):
 class HolidaysResponse(BaseModel):
     source: str
     country: str
-    year: int
+    count: int
+    data: list[dict]
+
+
+class HolidaysMultiResponse(BaseModel):
+    source: str
+    countries: List[str]
     count: int
     data: list[dict]
