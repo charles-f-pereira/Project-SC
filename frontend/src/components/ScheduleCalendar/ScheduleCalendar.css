@@ -12,16 +12,43 @@
   margin-bottom: 1.5rem;
   padding-bottom: 1rem;
   border-bottom: 2px solid #e0e0e0;
+  flex-wrap: wrap;
+  gap: 1rem;
 }
 
 .calendar-header h2 {
   font-size: 1.25rem;
   color: #2c3e50;
+  margin: 0;
+}
+
+.calendar-header-right {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.calendar-filter-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: #2c3e50;
+  user-select: none;
+}
+
+.calendar-filter-checkbox input[type="checkbox"] {
+  cursor: pointer;
+  width: 1rem;
+  height: 1rem;
 }
 
 .calendar-legend {
   display: flex;
   gap: 1.5rem;
+  flex-wrap: wrap;
 }
 
 .legend-item {
@@ -38,6 +65,12 @@
   border-radius: 3px;
 }
 
+.legend-dashed-box {
+  background: transparent !important;
+  border: 2px dashed #555;
+  box-sizing: border-box;
+}
+
 .calendar-container {
   width: 100%;
 }
@@ -46,6 +79,14 @@
   text-align: center;
   padding: 3rem;
   color: #666;
+}
+
+.calendar-empty-hint {
+  font-size: 0.9rem;
+  padding: 1.5rem;
+  background: #fff8e1;
+  border-radius: 6px;
+  margin-top: 1rem;
 }
 
 /* Override react-big-calendar styles */
@@ -63,6 +104,18 @@
   background-color: #e8f4f8;
 }
 
+/* Month view: grey cells are "off-range" – days from prev/next month that fill the grid.
+   e.g. when viewing March, the first row may show 26–28 Feb and 1 Mar so the grid is complete.
+   We use a light grey so they’re distinguishable but not heavy. */
+.rbc-off-range {
+  background-color: #f5f5f5;
+  color: #999;
+}
+
+.rbc-off-range-bg {
+  background-color: #f5f5f5;
+}
+
 .rbc-event {
   border-radius: 4px;
   padding: 2px 4px;
@@ -70,6 +123,35 @@
 
 .rbc-event-content {
   font-size: 0.85rem;
+}
+
+/* Paired order/delivery highlight – conic-gradient border animation */
+.rbc-event-pair-highlight {
+  position: relative;
+  overflow: visible;
+  box-shadow: none;
+}
+
+.rbc-event-pair-highlight::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 6px;
+  padding: 3px;
+  background: conic-gradient(from 0deg, #fff 0deg 90deg, transparent 90deg 180deg, #fff 180deg 270deg, transparent 270deg 360deg);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: conic-gradient-border-spin 1.2s linear infinite;
+  pointer-events: none;
+  z-index: 1;
+}
+
+@keyframes conic-gradient-border-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 768px) {

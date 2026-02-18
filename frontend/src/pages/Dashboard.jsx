@@ -71,6 +71,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [holidaysLoading, setHolidaysLoading] = useState(false)
   const [holidaysError, setHolidaysError] = useState(null)
+  const [schedulesLoading, setSchedulesLoading] = useState(false)
+  const [schedulesError, setSchedulesError] = useState(null)
   const [error, setError] = useState(null)
 
   // Filter state
@@ -91,7 +93,7 @@ export default function Dashboard() {
         setLoading(true)
         setError(null)
 
-        // Fetch locations and vendors first
+        // Fetch locations and vendors (hierarchy is fetched only when a single vendor is selected)
         const [locationsRes, vendorsRes] = await Promise.all([
           client.get('/api/locations', { params: { activeFlag: true } }).catch(() => ({ data: { data: [] } })),
           client.get('/api/vendors', { params: { activeFlag: true } }).catch(() => ({ data: { data: [] } }))
@@ -100,46 +102,8 @@ export default function Dashboard() {
         const locations = locationsRes.data.data || []
         const vendors = vendorsRes.data.data || []
 
-        // Fetch hierarchy data for each vendor
-        // Each vendor may have a hierarchyType like "3-AU Supply Chain - PFD" where PFD is the supplyCode
-        const hierarchyPromises = vendors.map(vendor => {
-          const supplyCode = vendor.supplyCode || vendor.code || vendor.vendorCode || vendor.Code || ''
-          if (supplyCode) {
-            // Construct hierarchyType parameter (e.g., "3-AU Supply Chain - PFD")
-            const hierarchyType = `3-AU Supply Chain - ${supplyCode}`
-            return client.get('/api/vendors/hierarchy', { 
-              params: { hierarchyType, levelNumber: 3 } 
-            }).catch(() => ({ data: { data: [] } }))
-          }
-          return Promise.resolve({ data: { data: [] } })
-        })
-
-        // Fetch hierarchy data and schedules (holidays are fetched manually via "Fetch PH data" button)
-        const [hierarchyResults, schedulesRes] = await Promise.all([
-          Promise.all(hierarchyPromises),
-          client.get('/api/schedules/vendor-locations').catch(() => ({ data: { data: [] } }))
-        ])
-
-        // Combine all hierarchy results into a single array
-        const allHierarchyData = hierarchyResults.flatMap(res => res.data.data || [])
-
         setLocations(locations)
         setVendors(vendors)
-        setHierarchy(allHierarchyData)
-        setSchedules(schedulesRes.data.data || [])
-        
-        // Debug: Log hierarchy data structure
-        if (allHierarchyData && allHierarchyData.length > 0) {
-          console.log('Hierarchy data sample:', allHierarchyData.slice(0, 5))
-          const level3Items = allHierarchyData.filter(item => item.levelNumber === 3 || item.levelNumber === '3')
-          console.log('Level 3 items count:', level3Items.length)
-          if (level3Items.length > 0) {
-            console.log('First level 3 item:', level3Items[0])
-            console.log('Level 3 item keys:', Object.keys(level3Items[0]))
-            console.log('parentLogicalName:', level3Items[0].parentLogicalName)
-            console.log('locationCode:', level3Items[0].locationCode)
-          }
-        }
       } catch (err) {
         console.error('Error fetching data:', err)
         setError(err.message || 'Failed to load data')
@@ -150,6 +114,34 @@ export default function Dashboard() {
 
     fetchData()
   }, [])
+
+  // Fetch hierarchy only when a single vendor is selected (for Distribution Centers filter)
+  useEffect(() => {
+    if (!filters.vendors || filters.vendors.length !== 1 || vendors.length === 0) {
+      setHierarchy([])
+      return
+    }
+    const vendorCode = filters.vendors[0]
+    const vendor = vendors.find(
+      (v) => (v.supplyCode || v.code || v.vendorCode || v.Code || '').toString().trim() === vendorCode.toString().trim()
+    )
+    const supplyCode = vendor ? (vendor.supplyCode || vendor.code || vendor.vendorCode || vendor.Code || '').toString().trim() : vendorCode
+    if (!supplyCode) {
+      setHierarchy([])
+      return
+    }
+    const hierarchyType = `3-AU Supply Chain - ${supplyCode}`
+    let cancelled = false
+    client
+      .get('/api/vendors/hierarchy', { params: { hierarchyType, levelNumber: 3 } })
+      .then((res) => {
+        if (!cancelled) setHierarchy(res.data?.data || [])
+      })
+      .catch(() => {
+        if (!cancelled) setHierarchy([])
+      })
+    return () => { cancelled = true }
+  }, [filters.vendors, vendors])
 
   // Extract unique countries from locations
   const availableCountries = useMemo(() => {
@@ -339,6 +331,45 @@ export default function Dashboard() {
     }
   }
 
+  // Single-location fetch: one locationCode only (backend returns all vendors for that location)
+  const scheduleFetchParams = useMemo(() => {
+    if (!filters.locations?.length || filters.locations.length !== 1) return {}
+    return { locationCode: filters.locations[0].trim() }
+  }, [filters.locations])
+
+  const fetchSchedules = async () => {
+    setSchedulesError(null)
+    if (!filters.locations?.length) {
+      setSchedulesError('Please select exactly one location.')
+      return
+    }
+    if (filters.locations.length !== 1) {
+      setSchedulesError('Please select exactly one location (single location only for now).')
+      return
+    }
+    try {
+      setSchedulesLoading(true)
+      const res = await client.get('/api/schedules/vendor-locations', { params: scheduleFetchParams })
+      let data = res.data?.data || []
+      console.log('[View Schedules] API response:', { count: data.length, firstKeys: data[0] ? Object.keys(data[0]) : [], sample: data[0] })
+      // Optional: filter by selected vendors client-side
+      if (filters.vendors?.length) {
+        const vendSet = new Set(filters.vendors)
+        data = data.filter(item => {
+          const v = item.vendorCode || item.VendorCode || item.vendor || ''
+          return vendSet.has(String(v).trim())
+        })
+        console.log('[View Schedules] After vendor filter:', data.length)
+      }
+      setSchedules(data)
+    } catch (err) {
+      console.error('Error fetching schedules:', err)
+      setSchedulesError(err.response?.data?.detail || err.message || 'Failed to fetch schedules')
+    } finally {
+      setSchedulesLoading(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="dashboard-loading">
@@ -368,6 +399,8 @@ export default function Dashboard() {
           dcToLocationCodes={dcToLocationCodes}
           filters={filters}
           onFiltersChange={setFilters}
+          onViewSchedules={fetchSchedules}
+          schedulesLoading={schedulesLoading}
         />
         <div className="dashboard-calendar-section">
           <div className="calendar-actions">
@@ -381,6 +414,9 @@ export default function Dashboard() {
             </button>
             {holidaysError && (
               <span className="holidays-error">{holidaysError}</span>
+            )}
+            {schedulesError && (
+              <span className="holidays-error">{schedulesError}</span>
             )}
           </div>
           <ScheduleCalendar

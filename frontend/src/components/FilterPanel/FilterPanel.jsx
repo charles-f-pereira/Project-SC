@@ -61,7 +61,7 @@ function extractState(loc) {
   return null
 }
 
-export default function FilterPanel({ locations, vendors, countries, states, distributionCenters, dcToLocationCodes, filters, onFiltersChange }) {
+export default function FilterPanel({ locations, vendors, countries, states, distributionCenters, dcToLocationCodes, filters, onFiltersChange, onViewSchedules, schedulesLoading }) {
   const [locationSearch, setLocationSearch] = useState('')
   const [vendorSearch, setVendorSearch] = useState('')
   
@@ -295,20 +295,33 @@ export default function FilterPanel({ locations, vendors, countries, states, dis
 
   return (
     <div className="filter-panel">
-      <div className="filter-panel-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <h2>Filters</h2>
-          <button onClick={toggleAllSections} className="expand-collapse-all-btn" title={Object.values(expandedSections).some(expanded => expanded) ? 'Collapse All' : 'Expand All'}>
-            {Object.values(expandedSections).some(expanded => expanded) ? 'Collapse All' : 'Expand All'}
-          </button>
+      <div className="filter-panel-header-pinned">
+        <div className="filter-panel-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <h2>Filters</h2>
+            <button onClick={toggleAllSections} className="expand-collapse-all-btn" title={Object.values(expandedSections).some(expanded => expanded) ? 'Collapse All' : 'Expand All'}>
+              {Object.values(expandedSections).some(expanded => expanded) ? 'Collapse All' : 'Expand All'}
+            </button>
+          </div>
+          {hasActiveFilters && (
+            <button onClick={clearFilters} className="clear-filters-btn">
+              Clear All
+            </button>
+          )}
         </div>
-        {hasActiveFilters && (
-          <button onClick={clearFilters} className="clear-filters-btn">
-            Clear All
+        {onViewSchedules && (
+          <button
+            onClick={onViewSchedules}
+            disabled={schedulesLoading}
+            className="view-schedules-btn"
+            title="Fetch and display schedules for the selected filters"
+          >
+            {schedulesLoading ? 'Loading...' : 'View Schedules'}
           </button>
         )}
       </div>
 
+      <div className="filter-panel-body">
       {/* Countries filter - at the top */}
       <div className="filter-section">
         <div className="filter-section-header" onClick={() => toggleSection('countries')}>
@@ -576,6 +589,7 @@ export default function FilterPanel({ locations, vendors, countries, states, dis
             ))}
           </div>
         )}
+      </div>
       </div>
     </div>
   )

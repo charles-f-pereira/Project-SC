@@ -79,6 +79,52 @@ async def hierarchy_health():
     return {"ok": True, "route": "hierarchy"}
 
 
+@router.get("/hierarchy/debug")
+async def get_hierarchy_debug(hierarchyType: str | None = None, levelNumber: int | None = 3):
+    """
+    Call Crunchtime hierarchy API and return the raw response and status.
+    Use this to verify whether Distribution Centers (hierarchy) data is being returned.
+    Example: GET /api/vendors/hierarchy/debug?hierarchyType=3-AU%20Supply%20Chain%20-%20PFD&levelNumber=3
+    """
+    url = f"{BASE_URL}/hierarchy/v2/getHierarchyDetails"
+    headers = ct_headers(token_override=service_token("hierarchy"))
+    params = {}
+    if hierarchyType:
+        params["hierarchyType"] = hierarchyType
+    if levelNumber is not None:
+        params["levelNumber"] = levelNumber
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url, headers=headers, params=params if params else None)
+            try:
+                raw_body = resp.json()
+            except Exception:
+                raw_body = resp.text
+            return {
+                "crunchtime_status_code": resp.status_code,
+                "crunchtime_url": str(resp.url),
+                "params_sent": params,
+                "raw_response": raw_body,
+                "response_type": "dict" if isinstance(raw_body, dict) else "list" if isinstance(raw_body, list) else "str",
+                "hint": "If status_code is 200, check raw_response for 'locations' or a list of items with parentLogicalName/locationCode.",
+            }
+    except httpx.HTTPStatusError as e:
+        return {
+            "crunchtime_status_code": e.response.status_code,
+            "crunchtime_url": str(e.request.url),
+            "params_sent": params,
+            "error": e.response.text,
+            "hint": "4xx from Crunchtime may mean wrong hierarchyType, wrong endpoint, or auth.",
+        }
+    except Exception as e:
+        return {
+            "params_sent": params,
+            "error": str(e),
+            "hint": "Check network, BASE_URL, and CRUNCHTIME_HIERARCHY_TOKEN_TEST.",
+        }
+
+
 @router.get("/hierarchy", response_model=HierarchyResponse)
 async def get_hierarchy(hierarchyType: str | None = None, levelNumber: int | None = 3):
     # Debug: confirm this handler is hit (if 404 persists, this log will be missing)

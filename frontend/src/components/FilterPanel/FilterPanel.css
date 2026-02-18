@@ -2,21 +2,58 @@
   width: 300px;
   background: white;
   border-radius: 8px;
-  padding: 1.5rem;
   box-shadow: 0 2px 8px rgba(0,0,0,0.1);
   max-height: calc(100vh - 200px);
-  overflow-y: auto;
   position: sticky;
   top: 2rem;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Pinned top: Filters title, Expand/Collapse All, Clear All, View Schedules – always visible */
+.filter-panel-header-pinned {
+  flex-shrink: 0;
+  padding: 1.5rem 1.5rem 1rem;
+  background: white;
+  border-bottom: 2px solid #e0e0e0;
+  z-index: 1;
 }
 
 .filter-panel-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 1.5rem;
-  padding-bottom: 1rem;
-  border-bottom: 2px solid #e0e0e0;
+  margin-bottom: 1rem;
+}
+
+.view-schedules-btn {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: #27ae60;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.view-schedules-btn:hover:not(:disabled) {
+  background: #219a52;
+}
+
+.view-schedules-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Scrollable filter sections */
+.filter-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem 1.5rem 1.5rem;
 }
 
 .filter-panel-header h2 {

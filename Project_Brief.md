@@ -1,17 +1,39 @@
-# Project SC - Ordering & Delivery Schedule Administration Framework
+# Project SC - Ordering & Delivery Schedule & Purchase Order Administration
 
 ## Project Overview
 
-Project SC is a new web application designed to enable corporate head office staff to efficiently administer ordering and delivery schedules for over 250+ restaurants across 10+ vendors. The application will integrate with existing Crunchtime systems and provide a unified interface for managing complex vendor-location-distribution center relationships.
+Project SC is a web application that enables corporate head office staff—in particular the **Supply Chain (SC) team**—to:
+
+1. **Administer ordering and delivery schedules** for 250+ restaurants across 10+ vendors, with calendar-based visualization and public holiday overlays.
+2. **Place batch/bulk purchase orders** on behalf of restaurants/locations so that products (e.g. a new sauce) are delivered by the time new product launches (e.g. new menu item with the new sauce).
+
+The application integrates with existing Crunchtime systems and provides a unified interface for vendor–location–distribution center relationships, schedule management, and purchase order processing.
 
 ## Objectives
 
 - Centralize ordering and delivery schedule management for 250+ restaurant locations
 - Support 10+ vendors with multiple distribution centers (typically state-based, but flexible)
+- **Allow the SC team to place batch/bulk purchase orders** for products (e.g. new sauce) so delivery aligns with product launch timing
 - Integrate with existing Crunchtime API infrastructure from Project-CT
 - Provide calendar-based visualization with public holiday overlays
 - Enable efficient filtering and viewing of schedules by location, vendor, state, DC, and delivery days
+- **Phase 1 (PO):** Integrate product catalog and vendor pricing from Crunchtime, and submit purchase orders via Crunchtime APIs
 - Future: Support vendor schedule imports in various formats
+
+## Scope & Framework in Place
+
+The following is in place or in progress for Project SC:
+
+| # | Area | Status |
+|---|------|--------|
+| 1 | Location details | In place |
+| 2 | Vendor details | In place |
+| 3 | Distribution centres | In place |
+| 4 | Expected order & delivery dates | In place (calendar; order/delivery pairing refinement parked for later) |
+| 5 | Product details | **New** – Phase 1 |
+| 6 | Purchase order processing | **New** – Phase 1 |
+
+**Batch purchase order use case (Phase 1):** The SC team will place batch/bulk purchase orders for a **new product (e.g. a sauce)** so that the sauce is delivered to each restaurant/location by the time the **new product with the new sauce launches**. The existing location, vendor, DC, and schedule data will support selecting locations, vendors, and timing for these orders.
 
 ## Technical Architecture
 
@@ -26,6 +48,8 @@ Project SC is a new web application designed to enable corporate head office sta
   - `/backend/app/vendors/` - Vendor and DC management
   - `/backend/app/locations/` - Location management
   - `/backend/app/holidays/` - Public holiday integration
+  - `/backend/app/products/` - Product catalog (Phase 1; getAllCompanyProductsEnhancedV1, getAllVendorProductPricing)
+  - `/backend/app/purchase_orders/` - Purchase order processing (Phase 1; savePurchaseOrders)
 
 ### Frontend (React + Vite)
 - **Framework**: React with Vite (consistent with Project-CT vendor_frontend)
@@ -70,6 +94,22 @@ Public Holidays API → FastAPI Backend → React Frontend (Calendar Overlay)
      - Retrieve standard delivery schedules (`vendorLocationScheduleDetail`)
      - Retrieve schedule overrides (`scheduleOverrideRowList`) for holiday periods
    - Usage: Primary data source for schedule display and management
+
+### Phase 1 – Product & Purchase Order Endpoints (New)
+
+The following Crunchtime API endpoints are required for Phase 1 batch purchase order functionality. Patterns and references may exist in **Project-CT**; they will be implemented or extended in this project.
+
+1. **getAllCompanyProductsEnhancedV1**
+   - Purpose: Build the list of **products available in Crunchtime** to be used when compiling the product definitions available to order.
+   - Usage: Populate product catalog / product definition list for the SC team when creating or reviewing purchase orders.
+
+2. **getAllVendorProductPricing**
+   - Purpose: Retrieve **vendor-specific data** (e.g. pricing, availability) for products from the `getAllCompanyProductsEnhancedV1` dataset.
+   - Usage: Show vendor-specific product options and pricing when placing purchase orders for a given vendor/location.
+
+3. **savePurchaseOrders**
+   - Purpose: **Submit/place purchase orders** in Crunchtime.
+   - Usage: Allow the SC team to place batch/bulk purchase orders (e.g. for the new sauce) so that orders are recorded in Crunchtime and can be fulfilled by the vendor for delivery to the restaurant/location by launch date.
 
 ### API Configuration (from Project-CT)
 
@@ -119,6 +159,18 @@ Reuse the existing configuration pattern:
    - Date, Name, Country
    - Used to identify override periods
 
+7. **Product (New – Phase 1)**
+   - Sourced from Crunchtime `getAllCompanyProductsEnhancedV1`
+   - Product definitions available to order; used when compiling purchase order line items (e.g. new sauce).
+
+8. **Vendor Product Pricing (New – Phase 1)**
+   - Sourced from Crunchtime `getAllVendorProductPricing`
+   - Vendor-specific product data (e.g. pricing, codes) for products from the company product list.
+
+9. **Purchase Order (New – Phase 1)**
+   - Created by the SC team; submitted via Crunchtime `savePurchaseOrders`.
+   - Links location(s), vendor, product(s), quantities, and timing so that delivery aligns with product launch (e.g. sauce delivered by launch date).
+
 ## Phase 1 Requirements
 
 ### Core Functionality
@@ -149,6 +201,12 @@ Reuse the existing configuration pattern:
    - Fetch vendor-location relationships
    - Fetch standard schedules
    - Cache data appropriately (consider 30min TTL like recipes in Project-CT)
+
+5. **Phase 1 – Product & Purchase Order (New)**
+   - **Product catalog:** Integrate `getAllCompanyProductsEnhancedV1` to build the list of product definitions available to order (e.g. for the new sauce).
+   - **Vendor product pricing:** Integrate `getAllVendorProductPricing` to retrieve vendor-specific product data for the company product list.
+   - **Purchase orders:** Integrate `savePurchaseOrders` so the SC team can place batch/bulk purchase orders (e.g. sauce) for locations/vendors, with delivery aligned to product launch timing.
+   - Reuse existing location, vendor, DC, and schedule context when building and submitting purchase orders.
 
 ### UI/UX Considerations
 
@@ -184,6 +242,14 @@ Project SC/
 │   │   ├── holidays/
 │   │   │   ├── __init__.py
 │   │   │   ├── routes.py          # Public holidays endpoints
+│   │   │   └── schemas.py
+│   │   ├── products/              # Phase 1: product catalog & vendor pricing
+│   │   │   ├── __init__.py
+│   │   │   ├── routes.py          # getAllCompanyProductsEnhancedV1, getAllVendorProductPricing
+│   │   │   └── schemas.py
+│   │   ├── purchase_orders/       # Phase 1: place purchase orders
+│   │   │   ├── __init__.py
+│   │   │   ├── routes.py          # savePurchaseOrders
 │   │   │   └── schemas.py
 │   │   └── main.py                # FastAPI app
 │   ├── .env                        # Environment variables
@@ -250,6 +316,9 @@ VITE_API_BASE_URL=http://localhost:8000
 
 ## Future Phases
 
+### Parked (to resume later)
+- **Order/delivery pairing:** Refinement of calendar pairing so that selecting an order event highlights the correct delivery event (e.g. order Friday → delivery following Monday when using Crunchtime 8–14 encoding). To be revisited later.
+
 ### Phase 2: Holiday Overlay & Override Management
 - Display public holidays on calendar
 - Show schedule overrides from `scheduleOverrideRowList`
@@ -296,6 +365,7 @@ VITE_API_BASE_URL=http://localhost:8000
 - Reuse SSL/truststore setup for corporate networks
 - Reference existing API endpoint patterns
 - Maintain consistency in code structure and style
+- **Phase 1 (PO):** Some Crunchtime product/PO endpoints (e.g. `getAllCompanyProductsEnhancedV1`, `getAllVendorProductPricing`, `savePurchaseOrders`) may have existing references or usage in Project-CT; this project will implement or extend the required calls.
 
 ## Next Steps
 
@@ -303,4 +373,5 @@ VITE_API_BASE_URL=http://localhost:8000
 2. Obtain API credentials and keys
 3. Set up development environment
 4. Initialize project structure
-5. Begin Phase 1 implementation
+5. Begin Phase 1 implementation (schedules)
+6. **Phase 1 (PO):** Confirm Crunchtime paths and payloads for `getAllCompanyProductsEnhancedV1`, `getAllVendorProductPricing`, and `savePurchaseOrders` (reference Project-CT where applicable); then implement product catalog and purchase order endpoints in this project
