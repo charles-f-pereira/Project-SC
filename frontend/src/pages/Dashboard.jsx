@@ -77,6 +77,7 @@ export default function Dashboard() {
 
   // Filter state
   const [filters, setFilters] = useState({
+    markets: [],
     countries: [],
     locations: [],
     vendors: [],
@@ -142,6 +143,23 @@ export default function Dashboard() {
       })
     return () => { cancelled = true }
   }, [filters.vendors, vendors])
+
+  // Extract distinct markets from locations (locationDetailDetails[].market)
+  const availableMarkets = useMemo(() => {
+    const set = new Set()
+    locations.forEach(loc => {
+      if (Array.isArray(loc.locationDetailDetails) && loc.locationDetailDetails.length > 0) {
+        const details = loc.locationDetailDetails[0]
+        const m = details?.market ?? details?.Market
+        if (m !== undefined && m !== null && m !== '') {
+          set.add(String(m).trim())
+        }
+      }
+      if (loc.market !== undefined && loc.market !== null && loc.market !== '') set.add(String(loc.market).trim())
+      if (loc.Market !== undefined && loc.Market !== null && loc.Market !== '') set.add(String(loc.Market).trim())
+    })
+    return Array.from(set).sort()
+  }, [locations])
 
   // Extract unique countries from locations
   const availableCountries = useMemo(() => {
@@ -395,6 +413,7 @@ export default function Dashboard() {
           vendors={vendors}
           countries={availableCountries}
           states={availableStates}
+          markets={availableMarkets}
           distributionCenters={availableDCs}
           dcToLocationCodes={dcToLocationCodes}
           filters={filters}

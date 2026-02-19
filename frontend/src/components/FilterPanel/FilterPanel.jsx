@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import './FilterPanel.css'
 
 const DAYS_OF_WEEK = [
@@ -61,12 +61,26 @@ function extractState(loc) {
   return null
 }
 
-export default function FilterPanel({ locations, vendors, countries, states, distributionCenters, dcToLocationCodes, filters, onFiltersChange, onViewSchedules, schedulesLoading }) {
+// Extract market from location (locationDetailDetails[].market) - each location has 1 market
+function extractMarket(loc) {
+  if (Array.isArray(loc.locationDetailDetails) && loc.locationDetailDetails.length > 0) {
+    const details = loc.locationDetailDetails[0]
+    const m = details?.market ?? details?.Market
+    if (m !== undefined && m !== null && m !== '') return String(m).trim()
+  }
+  if (loc.market !== undefined && loc.market !== null && loc.market !== '') return String(loc.market).trim()
+  if (loc.Market !== undefined && loc.Market !== null && loc.Market !== '') return String(loc.Market).trim()
+  return null
+}
+
+export default function FilterPanel({ locations, vendors, countries, states, markets, distributionCenters, dcToLocationCodes, filters, onFiltersChange, onViewSchedules, schedulesLoading, hideDayFilters = false, showViewSchedules = true }) {
   const [locationSearch, setLocationSearch] = useState('')
   const [vendorSearch, setVendorSearch] = useState('')
+  const [isCollapsed, setIsCollapsed] = useState(false)
   
   // Track which filter sections are expanded (default: all collapsed)
   const [expandedSections, setExpandedSections] = useState({
+    markets: false,
     countries: false,
     states: false,
     locations: false,
@@ -84,12 +98,10 @@ export default function FilterPanel({ locations, vendors, countries, states, dis
   }
 
   const toggleAllSections = () => {
-    // Check if any section is currently expanded
     const anyExpanded = Object.values(expandedSections).some(expanded => expanded === true)
-    
-    // If any are expanded, collapse all; otherwise expand all
     const newState = !anyExpanded
     setExpandedSections({
+      markets: newState,
       countries: newState,
       states: newState,
       locations: newState,
@@ -118,6 +130,19 @@ export default function FilterPanel({ locations, vendors, countries, states, dis
       const locationCode = loc.code || loc.locationCode || loc.Code || loc.LocationCode || ''
       if (locationCode === '000000') {
         return false
+      }
+      
+      // Filter by market if markets are selected (each location has 1 market)
+      if (filters.markets && filters.markets.length > 0) {
+        const locMarket = extractMarket(loc)
+        if (locMarket) {
+          const marketStr = typeof locMarket === 'string' ? locMarket.trim() : String(locMarket).trim()
+          if (marketStr.length > 0 && !filters.markets.includes(marketStr)) {
+            return false
+          }
+        } else {
+          return false
+        }
       }
       
       // Filter by country if countries are selected
@@ -169,7 +194,7 @@ export default function FilterPanel({ locations, vendors, countries, states, dis
       const code = (loc.code || loc.locationCode || loc.Code || '').toString().toLowerCase()
       return name.includes(searchLower) || code.includes(searchLower)
     })
-  }, [locations, filters.countries, filters.states, filters.distributionCenters, dcToLocationCodes, locationSearch])
+  }, [locations, filters.markets, filters.countries, filters.states, filters.distributionCenters, dcToLocationCodes, locationSearch])
 
   const filteredVendors = useMemo(() => {
     return vendors.filter(v => {
@@ -227,6 +252,7 @@ export default function FilterPanel({ locations, vendors, countries, states, dis
 
   const clearFilters = () => {
     onFiltersChange({
+      markets: [],
       countries: [],
       locations: [],
       vendors: [],
@@ -277,6 +303,61 @@ export default function FilterPanel({ locations, vendors, countries, states, dis
     }).length
   }, [locations, filters.states])
 
+  // Locations that match current country and state filters only (used to derive available markets)
+  const locationsByCountryAndState = useMemo(() => {
+    return locations.filter(loc => {
+      const locationCode = loc.code || loc.locationCode || loc.Code || loc.LocationCode || ''
+      if (locationCode === '000000') return false
+      if (filters.countries && filters.countries.length > 0) {
+        const locCountry = extractCountry(loc)
+        if (!locCountry) return false
+        const countryStr = typeof locCountry === 'string' ? locCountry.trim() : String(locCountry).trim()
+        if (!filters.countries.includes(countryStr)) return false
+      }
+      if (filters.states && filters.states.length > 0) {
+        const locState = extractState(loc)
+        if (!locState) return false
+        const stateStr = typeof locState === 'string' ? locState.trim() : String(locState).trim()
+        if (!filters.states.includes(stateStr)) return false
+      }
+      return true
+    })
+  }, [locations, filters.countries, filters.states])
+
+  // Markets list is dynamic: only markets for locations in the selected country/countries and state(s)
+  const availableMarketsFiltered = useMemo(() => {
+    const set = new Set()
+    locationsByCountryAndState.forEach(loc => {
+      const m = extractMarket(loc)
+      if (m !== undefined && m !== null && m !== '') set.add(String(m).trim())
+    })
+    return Array.from(set).sort()
+  }, [locationsByCountryAndState])
+
+  // When country/state change, drop any selected markets that are no longer in the dynamic list
+  useEffect(() => {
+    const current = filters.markets || []
+    if (current.length === 0) return
+    const allowed = new Set(availableMarketsFiltered)
+    const kept = current.filter(m => allowed.has(m))
+    if (kept.length !== current.length) {
+      onFiltersChange({ ...filters, markets: kept })
+    }
+  }, [availableMarketsFiltered, filters, onFiltersChange])
+
+  // Calculate the number of locations filtered by selected markets
+  const marketFilteredLocationCount = useMemo(() => {
+    if (!filters.markets || filters.markets.length === 0) {
+      return null
+    }
+    return locations.filter(loc => {
+      const locMarket = extractMarket(loc)
+      if (!locMarket) return false
+      const marketStr = typeof locMarket === 'string' ? locMarket.trim() : String(locMarket).trim()
+      return marketStr.length > 0 && filters.markets.includes(marketStr)
+    }).length
+  }, [locations, filters.markets])
+
   // Calculate the number of locations filtered by selected distribution centers
   const dcFilteredLocationCount = useMemo(() => {
     if (!filters.distributionCenters || filters.distributionCenters.length === 0 || !dcToLocationCodes) {
@@ -294,22 +375,48 @@ export default function FilterPanel({ locations, vendors, countries, states, dis
   }, [locations, filters.distributionCenters, dcToLocationCodes])
 
   return (
-    <div className="filter-panel">
-      <div className="filter-panel-header-pinned">
-        <div className="filter-panel-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <h2>Filters</h2>
-            <button onClick={toggleAllSections} className="expand-collapse-all-btn" title={Object.values(expandedSections).some(expanded => expanded) ? 'Collapse All' : 'Expand All'}>
-              {Object.values(expandedSections).some(expanded => expanded) ? 'Collapse All' : 'Expand All'}
-            </button>
+    <div className="filter-panel-wrapper">
+      <div className={`filter-panel ${isCollapsed ? 'filter-panel--collapsed' : ''}`}>
+        {!isCollapsed && (
+          <button
+            type="button"
+            onClick={() => setIsCollapsed(true)}
+            className="filter-panel-collapse-tab"
+            title="Collapse filters to get more space"
+            aria-label="Collapse filters"
+          >
+            <span className="filter-panel-collapse-arrow">◀</span>
+          </button>
+        )}
+        <div className="filter-panel-header-pinned">
+          <div className="filter-panel-header">
+            {isCollapsed ? (
+              <button
+                type="button"
+                onClick={() => setIsCollapsed(false)}
+                className="filter-panel-expand-btn"
+                title="Show filters"
+              >
+                <span className="filter-panel-expand-icon">▶</span>
+                <span className="filter-panel-expand-label">Filters</span>
+              </button>
+            ) : (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <h2>Filters</h2>
+                  <button onClick={toggleAllSections} className="expand-collapse-all-btn" title={Object.values(expandedSections).some(expanded => expanded) ? 'Collapse All' : 'Expand All'}>
+                    {Object.values(expandedSections).some(expanded => expanded) ? 'Collapse All' : 'Expand All'}
+                  </button>
+                </div>
+                {hasActiveFilters && (
+                  <button onClick={clearFilters} className="clear-filters-btn">
+                    Clear All
+                  </button>
+                )}
+              </>
+            )}
           </div>
-          {hasActiveFilters && (
-            <button onClick={clearFilters} className="clear-filters-btn">
-              Clear All
-            </button>
-          )}
-        </div>
-        {onViewSchedules && (
+        {!isCollapsed && showViewSchedules && onViewSchedules && (
           <button
             onClick={onViewSchedules}
             disabled={schedulesLoading}
@@ -321,8 +428,9 @@ export default function FilterPanel({ locations, vendors, countries, states, dis
         )}
       </div>
 
+      {!isCollapsed && (
       <div className="filter-panel-body">
-      {/* Countries filter - at the top */}
+      {/* Countries filter */}
       <div className="filter-section">
         <div className="filter-section-header" onClick={() => toggleSection('countries')}>
           <div className="filter-section-title">
@@ -354,7 +462,7 @@ export default function FilterPanel({ locations, vendors, countries, states, dis
         )}
       </div>
 
-      {/* States filter - moved to top */}
+      {/* States filter */}
       <div className="filter-section">
         <div className="filter-section-header" onClick={() => toggleSection('states')}>
           <div className="filter-section-title">
@@ -386,7 +494,39 @@ export default function FilterPanel({ locations, vendors, countries, states, dis
         )}
       </div>
 
-      {/* Locations filter - moved to second position */}
+      {/* Markets filter - between States & Locations; list only markets for locations in selected country/countries and state(s) */}
+      <div className="filter-section">
+        <div className="filter-section-header" onClick={() => toggleSection('markets')}>
+          <div className="filter-section-title">
+            <h3>
+              Markets
+              {marketFilteredLocationCount !== null && (
+                <span className="filter-location-count"> ({marketFilteredLocationCount} location{marketFilteredLocationCount !== 1 ? 's' : ''})</span>
+              )}
+            </h3>
+            {getActiveFilterCount('markets') > 0 && (
+              <span className="filter-badge">{getActiveFilterCount('markets')}</span>
+            )}
+          </div>
+          <span className="filter-toggle-icon">{expandedSections.markets ? '▼' : '▶'}</span>
+        </div>
+        {expandedSections.markets && (
+          <div className="filter-checkbox-list">
+            {(availableMarketsFiltered || []).map(market => (
+              <label key={market} className="filter-checkbox">
+                <input
+                  type="checkbox"
+                  checked={(filters.markets || []).includes(market)}
+                  onChange={(e) => handleMultiSelect('markets', market, e.target.checked)}
+                />
+                <span>{market}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Locations filter */}
       <div className="filter-section">
         <div className="filter-section-header" onClick={() => toggleSection('locations')}>
           <div className="filter-section-title">
@@ -537,7 +677,8 @@ export default function FilterPanel({ locations, vendors, countries, states, dis
         )}
       </div>
 
-      {/* Ordering Days filter */}
+      {/* Ordering Days filter - hidden when hideDayFilters (e.g. Auto Allocation) */}
+      {!hideDayFilters && (
       <div className="filter-section">
         <div className="filter-section-header" onClick={() => toggleSection('orderingDays')}>
           <div className="filter-section-title">
@@ -563,8 +704,10 @@ export default function FilterPanel({ locations, vendors, countries, states, dis
           </div>
         )}
       </div>
+      )}
 
-      {/* Delivery Days filter */}
+      {/* Delivery Days filter - hidden when hideDayFilters */}
+      {!hideDayFilters && (
       <div className="filter-section">
         <div className="filter-section-header" onClick={() => toggleSection('deliveryDays')}>
           <div className="filter-section-title">
@@ -590,7 +733,10 @@ export default function FilterPanel({ locations, vendors, countries, states, dis
           </div>
         )}
       </div>
+      )}
       </div>
+      )}
     </div>
+  </div>
   )
 }

@@ -4,7 +4,8 @@ import os
 import httpx
 from .config import (
     BASE_URL, AUTH_TOKEN, SITE_NAME, USER_ID, PASSWORD,
-    HIERARCHY_TOKEN, VENDOR_TOKEN, VENDOR_LOCATION_TOKEN
+    HIERARCHY_TOKEN, VENDOR_TOKEN, VENDOR_LOCATION_TOKEN,
+    COMPANY_PRODUCT_ENHANCED_TOKEN, VENDOR_PRODUCT_PRICING_TOKEN,
 )
 
 
@@ -20,6 +21,8 @@ def service_token(service_key: str | None) -> str:
             "vendor": VENDOR_TOKEN or AUTH_TOKEN,
             "vendorlocation": VENDOR_LOCATION_TOKEN or AUTH_TOKEN,
             "location": AUTH_TOKEN,
+            "companyproduct": COMPANY_PRODUCT_ENHANCED_TOKEN or AUTH_TOKEN,
+            "vendorproductpricing": VENDOR_PRODUCT_PRICING_TOKEN or AUTH_TOKEN,
         }
         return explicit_map.get(key, AUTH_TOKEN)
     return AUTH_TOKEN
