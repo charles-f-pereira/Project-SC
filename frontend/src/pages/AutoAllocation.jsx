@@ -33,6 +33,26 @@ function extractState(loc) {
   return null
 }
 
+function extractLocationName(loc) {
+  let nameDetails = null
+  if (Array.isArray(loc.locationNameAddressDetails) && loc.locationNameAddressDetails.length > 0) {
+    nameDetails = loc.locationNameAddressDetails[0]
+  } else if (loc.locationNameAddressDetails && typeof loc.locationNameAddressDetails === 'object') {
+    nameDetails = loc.locationNameAddressDetails
+  }
+  const name = nameDetails?.locationName || nameDetails?.LocationName || nameDetails?.name || nameDetails?.Name ||
+    loc.locationName || loc.LocationName || loc.name || loc.Name || loc.description || loc.Description
+  return (name && typeof name === 'string') ? name.trim() : null
+}
+
+function extractMarket(loc) {
+  if (Array.isArray(loc.locationDetailDetails) && loc.locationDetailDetails.length > 0) {
+    const d = loc.locationDetailDetails[0]
+    return d?.market ?? d?.Market ?? null
+  }
+  return loc.market ?? loc.Market ?? null
+}
+
 const MAX_PRODUCT_LINES = 10
 const SYDNEY_TZ = 'Australia/Sydney'
 
@@ -349,6 +369,7 @@ export default function AutoAllocation() {
     const newItem = {
       id,
       productName: product.productName || product.name || '—',
+      productNumber: product.productNumber ?? product.productNo ?? null,
       vendorProductNumber: product.vendorProductNumber || product.vendorProductNo || '—',
       vendorUnit: product.vendorUnit || product.unit || '—',
       qty: 1
@@ -402,13 +423,36 @@ export default function AutoAllocation() {
       return
     }
 
+    const locationDetails = locationCodes.map(code => {
+      const codeStr = String(code || '')
+      const loc = locations.find(l => String(l.code || l.locationCode || l.Code || l.LocationCode || '') === codeStr)
+      if (!loc) return { location_code: codeStr, location_name: null, country: null, state: null, market: null }
+      return {
+        location_code: codeStr,
+        location_name: extractLocationName(loc) || null,
+        country: extractCountry(loc) || null,
+        state: extractState(loc) || null,
+        market: extractMarket(loc) || null
+      }
+    })
+    const vendorCodeStr = String(vendorCodes[0] || '').trim()
+    const selectedVendor = vendors.find(
+      v => String(v.code || v.vendorCode || v.Code || v.supplyCode || '').trim() === vendorCodeStr
+    )
+    const vendorName = selectedVendor
+      ? (selectedVendor.supplyName || selectedVendor.name || selectedVendor.vendorName || selectedVendor.Name || vendorCodeStr || null)
+      : vendorCodeStr || null
+
     const payload = {
       order_date_time: orderDateTime.length <= 16 ? `${orderDateTime}:00` : orderDateTime,
       expected_delivery_date: expectedDeliveryDate,
       location_codes: locationCodes,
+      location_details: locationDetails,
       vendor_code: vendorCodes[0],
+      vendor_name: vendorName,
       line_items: validLines.map(li => ({
         product_name: li.productName,
+        product_number: li.productNumber || null,
         vendor_product_number: li.vendorProductNumber,
         vendor_unit: li.vendorUnit || '',
         qty: Math.max(0, parseInt(li.qty, 10) || 0)

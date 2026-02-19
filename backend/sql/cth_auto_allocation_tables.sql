@@ -1,0 +1,59 @@
+-- Project SC: Auto Allocation transaction tables
+-- Database: GYG-CT-Helper, Schema: CTH
+-- Run this script against the PostgreSQL database to create the schema and tables.
+
+CREATE SCHEMA IF NOT EXISTS "CTH";
+
+-- Header: one row per location (Crunchtime savePurchaseOrders is called per location; each location gets a unique autoAllocateTransID)
+-- Columns without NOT NULL allow NULL. Future-use columns (submitUserId, vendorEdiFlag, confirmReceivedStatus, confirmRecievedDateTime) and distributionCenter allow NULL.
+CREATE TABLE "CTH"."autoAllocationTransHdr" (
+    "autoAllocateTransID"   BIGSERIAL PRIMARY KEY,
+    country                 VARCHAR(100) NULL,
+    state                   VARCHAR(100) NULL,
+    "locationCode"          VARCHAR(500) NULL,
+    "locationName"          VARCHAR(500) NULL,
+    market                  VARCHAR(100) NULL,
+    "vendorCode"            VARCHAR(100) NULL,
+    "vendorName"            VARCHAR(255) NULL,
+    "distributionCenter"    VARCHAR(255) NULL,
+    "createDateTime"        TIMESTAMPTZ NOT NULL,
+    "setOrderDateTme"       TIMESTAMPTZ NOT NULL,
+    "setExpectedDeliveryDate" DATE NOT NULL,
+    "setExpectedDeliveryDOW"  VARCHAR(3) NULL,
+    "submittedDateTime"     TIMESTAMPTZ NULL,
+    "transactionNo"         VARCHAR(100) NULL,
+    "submitUserId"          VARCHAR(100) NULL,
+    "vendorEdiFlag"         VARCHAR(10) NULL,
+    "confirmReceivedStatus" VARCHAR(50) NULL,
+    "confirmRecievedDateTime" TIMESTAMPTZ NULL
+);
+
+COMMENT ON TABLE "CTH"."autoAllocationTransHdr" IS 'Auto Allocation transaction header: one row per location (savePurchaseOrders called per location). Timestamps in UTC.';
+COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."createDateTime" IS 'When the record was saved in the app (UTC).';
+COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."setOrderDateTme" IS 'Order date/time selected for the PO; stored in UTC (front end displays AEST/AEDT).';
+COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."setExpectedDeliveryDOW" IS 'Expected delivery day of week derived from setExpectedDeliveryDate (e.g. Mon, Tue, Wed).';
+COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."submittedDateTime" IS 'When the system successfully submitted the PO (UTC).';
+COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."transactionNo" IS 'From Crunchtime orderNumber after savePurchaseOrders.';
+COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."submitUserId" IS 'Reserved: userid of the user that submitted the PO.';
+COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."vendorEdiFlag" IS 'Reserved: EDI workflow control.';
+COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."confirmReceivedStatus" IS 'Reserved: PO status for EDI vendors.';
+COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."confirmRecievedDateTime" IS 'Reserved: status change timestamp (UTC).';
+
+-- Detail: line items (products) per header; productNumber, productName, vendorUnit allow NULL (vendorCode removed; vendor is on header)
+CREATE TABLE "CTH"."autoAllocationTransDtl" (
+    "autoAllocateItmTransID" BIGSERIAL PRIMARY KEY,
+    "autoAllocateTransID"    BIGINT NOT NULL REFERENCES "CTH"."autoAllocationTransHdr"("autoAllocateTransID") ON DELETE CASCADE,
+    "productNumber"         VARCHAR(100) NULL,
+    "productName"           VARCHAR(255) NULL,
+    "vendorUnit"            VARCHAR(100) NULL,
+    "orderQuantity"         INTEGER NOT NULL
+);
+
+-- If the table already exists with vendorCode, run this to drop it:
+-- ALTER TABLE "CTH"."autoAllocationTransDtl" DROP COLUMN IF EXISTS "vendorCode";
+
+COMMENT ON TABLE "CTH"."autoAllocationTransDtl" IS 'Auto Allocation transaction detail: product lines per header.';
+COMMENT ON COLUMN "CTH"."autoAllocationTransDtl"."autoAllocateTransID" IS 'FK to autoAllocationTransHdr.';
+
+CREATE INDEX idx_autoAllocationTransDtl_autoAllocateTransID
+    ON "CTH"."autoAllocationTransDtl"("autoAllocateTransID");

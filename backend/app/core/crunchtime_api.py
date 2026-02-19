@@ -6,6 +6,7 @@ from .config import (
     BASE_URL, AUTH_TOKEN, SITE_NAME, USER_ID, PASSWORD,
     HIERARCHY_TOKEN, VENDOR_TOKEN, VENDOR_LOCATION_TOKEN,
     COMPANY_PRODUCT_ENHANCED_TOKEN, VENDOR_PRODUCT_PRICING_TOKEN,
+    PURCHASE_ORDERS_TOKEN,
 )
 
 
@@ -23,6 +24,8 @@ def service_token(service_key: str | None) -> str:
             "location": AUTH_TOKEN,
             "companyproduct": COMPANY_PRODUCT_ENHANCED_TOKEN or AUTH_TOKEN,
             "vendorproductpricing": VENDOR_PRODUCT_PRICING_TOKEN or AUTH_TOKEN,
+            "purchaseorder": PURCHASE_ORDERS_TOKEN or AUTH_TOKEN,
+            "purchaseorders": PURCHASE_ORDERS_TOKEN or AUTH_TOKEN,
         }
         return explicit_map.get(key, AUTH_TOKEN)
     return AUTH_TOKEN

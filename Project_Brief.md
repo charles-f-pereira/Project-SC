@@ -68,6 +68,27 @@ Crunchtime APIs → FastAPI Backend → React Frontend
 Public Holidays API → FastAPI Backend → React Frontend (Calendar Overlay)
 ```
 
+### PostgreSQL transaction store (Auto Allocation)
+
+Transactional records for Auto Allocation submissions are persisted in PostgreSQL for audit and future EDI/workflow use.
+
+- **Database:** `GYG-CT-Helper`
+- **Schema:** `CTH`
+- **Credentials (in `.env`):** `pgName` (username), `pgPassword` (password). Optionally `pgHost`, `pgPort`, `pgDatabase` if not using defaults.
+
+**Tables:**
+
+| Table | Purpose |
+|-------|--------|
+| `CTH.autoAllocationTransHdr` | One row **per location**. Auto Allocation may generate multiple locations in one batch; submission to Crunchtime `savePurchaseOrders` is done per location; each location gets a unique `autoAllocateTransID`. Each row stores: **country, state, locationCode, locationName, market** (from the selected location, sent by the frontend in `location_details`); **vendorCode, vendorName** (vendor name from frontend); distribution centre; `createDateTime` (UTC); `setOrderDateTme` (UTC); `setExpectedDeliveryDate`, `setExpectedDeliveryDOW`; `submittedDateTime` (UTC); `transactionNo` from Crunchtime `orderNumber`. Future: `submitUserId`, `vendorEdiFlag`, `confirmReceivedStatus`, `confirmRecievedDateTime`. |
+| `CTH.autoAllocationTransDtl` | Line items per header: **productNumber** (company product number), product name, vendor unit, order quantity. Vendor is on the header only (no vendorCode column in detail). `autoAllocateTransID` references `autoAllocationTransHdr.autoAllocateTransID`. |
+
+- **Timestamps:** All stored in UTC. The front end displays order date/time in AEST/AEDT; `setOrderDateTme` is stored in UTC.
+- **Multi-location:** The Auto Allocation flow can select multiple locations and one vendor/product set. When submitting via `https://webservices-test.net-chef.com/purchaseorder/v1/savePurchaseOrders` (when implemented), the backend will call the Crunchtime API **per location**. Each such submission is persisted as a separate header row (unique `autoAllocateTransID`) with that location’s code/name and its associated detail rows. So `locationCode` and `locationName` in each header row hold a single location; multiple locations result in multiple header rows.
+- **Crunchtime:** After each successful per-location call to `savePurchaseOrders`, the response `orderNumber` is recorded in that header’s `transactionNo`.
+
+**SQL script:** [`backend/sql/cth_auto_allocation_tables.sql`](backend/sql/cth_auto_allocation_tables.sql) — run against the database to create the schema and tables.
+
 ## Crunchtime API Endpoints
 
 ### Required Endpoints (from Project-CT patterns)
@@ -308,6 +329,14 @@ password=<password>
 
 # Public Holidays API
 API_NINJAS_KEY=<key>
+
+# PostgreSQL (Auto Allocation transaction store, database GYG-CT-Helper)
+pgName=<postgres_username>
+pgPassword=<postgres_password>
+# Optional if not using defaults:
+# pgHost=localhost
+# pgPort=5432
+# pgDatabase=GYG-CT-Helper
 ```
 
 ### Frontend (.env)
