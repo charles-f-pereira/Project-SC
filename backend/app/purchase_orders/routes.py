@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.core.config import BASE_URL, PG_DATABASE, PG_HOST, PG_NAME, PG_PASSWORD, PG_PORT
 from app.core.crunchtime_api import ct_headers, get_async_client, service_token
@@ -13,6 +13,23 @@ from app.purchase_orders.schemas import (
 )
 
 router = APIRouter()
+
+
+def _get_pg_connection():
+    """Return psycopg2 connection if credentials set, else None."""
+    if not (PG_NAME and PG_PASSWORD):
+        return None
+    try:
+        import psycopg2
+        return psycopg2.connect(
+            host=PG_HOST,
+            port=PG_PORT,
+            dbname=PG_DATABASE,
+            user=PG_NAME,
+            password=PG_PASSWORD,
+        )
+    except Exception:
+        return None
 
 SAVE_PURCHASE_ORDERS_PATH = "/purchaseorder/v1/savePurchaseOrders"
 
@@ -102,27 +119,64 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
             detail="Expected delivery date must be today or in the future.",
         )
 
-    # Validate that at least one line has qty > 0
-    valid_lines = [li for li in body.line_items if li.qty > 0]
-    if not valid_lines:
+    # Per-location expected delivery dates (optional)
+    expected_delivery_dates_list = body.expected_delivery_dates
+    if expected_delivery_dates_list is not None:
+        if len(expected_delivery_dates_list) != len(body.location_codes):
+            raise HTTPException(
+                status_code=400,
+                detail="expected_delivery_dates length must match location_codes.",
+            )
+        for i, ed in enumerate(expected_delivery_dates_list):
+            ed = (ed or "").strip()
+            if not ed:
+                raise HTTPException(status_code=400, detail=f"Expected delivery date required for location index {i}.")
+            try:
+                d = datetime.strptime(ed, "%Y-%m-%d").date()
+                if d < today_sydney:
+                    raise HTTPException(status_code=400, detail=f"Expected delivery date for location index {i} must be today or future.")
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Expected delivery date for location index {i} must be YYYY-MM-DD.")
+
+    # Per-location line items (optional)
+    location_line_items_list = body.location_line_items
+    if location_line_items_list is not None:
+        if len(location_line_items_list) != len(body.location_codes):
+            raise HTTPException(
+                status_code=400,
+                detail="location_line_items length must match location_codes.",
+            )
+        for i, loc_lines in enumerate(location_line_items_list):
+            valid = [li for li in loc_lines if li.qty > 0]
+            if not valid:
+                raise HTTPException(status_code=400, detail=f"At least one line item with qty > 0 required for location index {i}.")
+
+    # Validate that at least one line has qty > 0 when not using location_line_items
+    valid_lines_default = [li for li in body.line_items if li.qty > 0]
+    if not valid_lines_default and location_line_items_list is None:
         raise HTTPException(
             status_code=400,
             detail="At least one line item must have quantity greater than 0.",
         )
 
-    ct_expected_date = _expected_delivery_date_to_ct_format(body.expected_delivery_date)
-    detail_rows = [
-        {
-            "orderQuantity": li.qty,
-            "vendorProductNumber": li.vendor_product_number,
-            "vendorUnit": li.vendor_unit or "",
-        }
-        for li in valid_lines
-    ]
-
     # Crunchtime allows max 1 purchase order per savePurchaseOrders call; one payload per location.
     payloads = []
-    for loc_code in body.location_codes:
+    per_location_valid_lines = []
+    per_location_expected_dates = []
+    for i, loc_code in enumerate(body.location_codes):
+        if location_line_items_list is not None:
+            valid_lines = [li for li in location_line_items_list[i] if li.qty > 0]
+        else:
+            valid_lines = valid_lines_default
+        if expected_delivery_dates_list is not None:
+            loc_expected = (expected_delivery_dates_list[i] or "").strip() or expected_delivery
+        else:
+            loc_expected = expected_delivery
+        ct_expected_date = _expected_delivery_date_to_ct_format(loc_expected)
+        detail_rows = [
+            {"orderQuantity": li.qty, "vendorProductNumber": li.vendor_product_number, "vendorUnit": li.vendor_unit or ""}
+            for li in valid_lines
+        ]
         payloads.append({
             "purchaseOrderSaveRows": [
                 {
@@ -138,6 +192,8 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
             ],
             "locationCode": loc_code,
         })
+        per_location_valid_lines.append(valid_lines)
+        per_location_expected_dates.append(loc_expected)
 
     token = service_token("purchaseorder")
     headers = {
@@ -216,6 +272,9 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                 location_name = loc_detail.location_name if loc_detail else None
                 market = loc_detail.market if loc_detail else None
                 vendor_name = body.vendor_name
+                loc_expected_date = per_location_expected_dates[i] if i < len(per_location_expected_dates) else body.expected_delivery_date
+                expected_dow = _day_of_week_abbrev(loc_expected_date)
+                valid_lines_loc = per_location_valid_lines[i] if i < len(per_location_valid_lines) else valid_lines_default
                 cur.execute(
                     """
                     INSERT INTO "CTH"."autoAllocationTransHdr" (
@@ -229,14 +288,14 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                     (
                         country, state, loc_code, location_name, market,
                         body.vendor_code, vendor_name, None,
-                        now_utc, set_order_utc, body.expected_delivery_date,
+                        now_utc, set_order_utc, loc_expected_date,
                         expected_dow, now_utc, trans_no,
                     ),
                 )
                 row = cur.fetchone()
                 hdr_id = row[0] if row else None
                 if hdr_id:
-                    for li in valid_lines:
+                    for li in valid_lines_loc:
                         cur.execute(
                             """
                             INSERT INTO "CTH"."autoAllocationTransDtl" (
@@ -253,11 +312,182 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
             # Log but do not fail the request; Crunchtime already succeeded
             pass
 
+    total_lines = sum(len(v) for v in per_location_valid_lines)
     return PurchaseOrderSubmitResponse(
         success=True,
         message="Order submitted successfully." + (f" Order number(s): {', '.join(order_numbers)}" if order_numbers else ""),
         order_date_time=body.order_date_time,
         expected_delivery_date=body.expected_delivery_date,
         location_count=len(body.location_codes),
-        line_count=len(valid_lines),
+        line_count=total_lines,
     )
+
+
+@router.get("/transactions/filter-options")
+def get_transactions_filter_options():
+    """
+    Return distinct values for State, Market, Vendor, Location for use in review page filters.
+    """
+    conn = _get_pg_connection()
+    if not conn:
+        return {"states": [], "markets": [], "vendors": [], "locations": []}
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT state FROM "CTH"."autoAllocationTransHdr" WHERE state IS NOT NULL AND state != '' ORDER BY state
+            """
+        )
+        states = [r[0] for r in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT DISTINCT market FROM "CTH"."autoAllocationTransHdr" WHERE market IS NOT NULL AND market != '' ORDER BY market
+            """
+        )
+        markets = [r[0] for r in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT DISTINCT "vendorName" FROM "CTH"."autoAllocationTransHdr" WHERE "vendorName" IS NOT NULL AND "vendorName" != '' ORDER BY "vendorName"
+            """
+        )
+        vendors = [r[0] for r in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT DISTINCT "locationCode" FROM "CTH"."autoAllocationTransHdr" WHERE "locationCode" IS NOT NULL AND "locationCode" != '' ORDER BY "locationCode"
+            """
+        )
+        locations = [r[0] for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return {"states": states, "markets": markets, "vendors": vendors, "locations": locations}
+    except Exception as e:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=f"Failed to load filter options: {e!s}")
+
+
+@router.get("/transactions/{transaction_id:int}/details")
+def get_transaction_details(transaction_id: int):
+    """
+    Return product line details (autoAllocationTransDtl) for a given transaction header id.
+    """
+    conn = _get_pg_connection()
+    if not conn:
+        return {"data": []}
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT "productNumber", "productName", "vendorUnit", "orderQuantity"
+            FROM "CTH"."autoAllocationTransDtl"
+            WHERE "autoAllocateTransID" = %s
+            ORDER BY "autoAllocateItmTransID"
+            """,
+            (transaction_id,),
+        )
+        rows = cur.fetchall()
+        colnames = [d[0] for d in cur.description]
+        cur.close()
+        conn.close()
+        data = [dict(zip(colnames, row)) for row in rows]
+        return {"data": data}
+    except Exception as e:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=f"Failed to load transaction details: {e!s}")
+
+
+@router.get("/transactions")
+def get_transactions(
+    limit: int = Query(100, ge=1, le=500, description="Max rows to return"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+    state: str | None = Query(None, description="Filter by state"),
+    market: str | None = Query(None, description="Filter by market"),
+    vendor_name: str | None = Query(None, alias="vendor", description="Filter by vendor name"),
+    location_code: str | None = Query(None, alias="location", description="Filter by location code"),
+    from_date: str | None = Query(None, description="Filter expected delivery from (YYYY-MM-DD)"),
+    to_date: str | None = Query(None, description="Filter expected delivery to (YYYY-MM-DD)"),
+    po_number: str | None = Query(None, alias="po", description="Filter by PO number (partial match)"),
+):
+    """
+    List Auto Allocation transactions from PostgreSQL (CTH.autoAllocationTransHdr).
+    Default: last 100 rows ordered by primary key desc. Optional filters.
+    Returns one row per transaction with timestamps in ISO UTC (front end converts to local).
+    """
+    conn = _get_pg_connection()
+    if not conn:
+        return {"data": []}
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT
+                "autoAllocateTransID",
+                state,
+                market,
+                "vendorName",
+                "distributionCenter",
+                "locationCode",
+                "locationName",
+                "setExpectedDeliveryDate",
+                "setExpectedDeliveryDOW",
+                "setOrderDateTme",
+                "submittedDateTime",
+                "transactionNo",
+                "confirmReceivedStatus"
+            FROM "CTH"."autoAllocationTransHdr"
+            WHERE 1=1
+        """
+        params = []
+        if state and state.strip():
+            params.append(state.strip())
+            sql += " AND state = %s"
+        if market and market.strip():
+            params.append(market.strip())
+            sql += " AND market = %s"
+        if vendor_name and vendor_name.strip():
+            params.append(vendor_name.strip())
+            sql += " AND \"vendorName\" = %s"
+        if location_code and location_code.strip():
+            params.append(location_code.strip())
+            sql += " AND \"locationCode\" = %s"
+        if from_date and from_date.strip():
+            params.append(from_date.strip())
+            sql += " AND \"setExpectedDeliveryDate\" >= %s"
+        if to_date and to_date.strip():
+            params.append(to_date.strip())
+            sql += " AND \"setExpectedDeliveryDate\" <= %s"
+        if po_number and po_number.strip():
+            params.append(f"%{po_number.strip()}%")
+            sql += " AND \"transactionNo\" ILIKE %s"
+        sql += " ORDER BY \"transactionNo\" DESC NULLS LAST LIMIT %s OFFSET %s"
+        params.extend([limit, offset])
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        colnames = [d[0] for d in cur.description]
+        data = []
+        for row in rows:
+            rec = dict(zip(colnames, row))
+            for key in ("setExpectedDeliveryDate", "setOrderDateTme", "submittedDateTime"):
+                if key in rec and rec[key] is not None:
+                    v = rec[key]
+                    if hasattr(v, "isoformat"):
+                        rec[key] = v.isoformat()
+                    else:
+                        rec[key] = str(v)
+            data.append(rec)
+        cur.close()
+        conn.close()
+        return {"data": data}
+    except Exception as e:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=f"Failed to load transactions: {e!s}")

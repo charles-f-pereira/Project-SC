@@ -36,6 +36,10 @@ class PurchaseOrderSubmitRequest(BaseModel):
         min_length=1,
         description="Location codes to which the order applies"
     )
+    expected_delivery_dates: Optional[List[str]] = Field(
+        None,
+        description="Per-location expected delivery date (YYYY-MM-DD), same order as location_codes. If provided, length must match location_codes."
+    )
     location_details: Optional[List[LocationDetail]] = Field(
         None,
         description="Per-location Country, State, LocationName, Market for recording (same order as location_codes)"
@@ -46,7 +50,11 @@ class PurchaseOrderSubmitRequest(BaseModel):
         ...,
         min_length=1,
         max_length=10,
-        description="Products and quantities to order (max 10 lines)"
+        description="Products and quantities to order (max 10 lines); used when location_line_items not provided"
+    )
+    location_line_items: Optional[List[List[PurchaseOrderLineItem]]] = Field(
+        None,
+        description="Per-location line items (one list per location, same order as location_codes). If provided, overrides line_items per location."
     )
 
 

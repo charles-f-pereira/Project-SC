@@ -196,6 +196,61 @@ export default function FilterPanel({ locations, vendors, countries, states, mar
     })
   }, [locations, filters.markets, filters.countries, filters.states, filters.distributionCenters, dcToLocationCodes, locationSearch])
 
+  // Set of location codes that pass country/state/market/DC filters (no search) – used for "Select all" and to prune invalid selections
+  const availableLocationCodes = useMemo(() => {
+    const locationCodesInDCs = new Set()
+    if (filters.distributionCenters && filters.distributionCenters.length > 0 && dcToLocationCodes) {
+      filters.distributionCenters.forEach(dcName => {
+        const codes = dcToLocationCodes.get(dcName)
+        if (codes) codes.forEach(code => locationCodesInDCs.add(code))
+      })
+    }
+    const set = new Set()
+    locations.forEach(loc => {
+      const locationCode = loc.code || loc.locationCode || loc.Code || loc.LocationCode || ''
+      if (locationCode === '000000') return
+      if (filters.markets && filters.markets.length > 0) {
+        const locMarket = extractMarket(loc)
+        if (!locMarket) return
+        const marketStr = String(locMarket).trim()
+        if (marketStr.length === 0 || !filters.markets.includes(marketStr)) return
+      }
+      if (filters.countries && filters.countries.length > 0) {
+        const locCountry = extractCountry(loc)
+        if (!locCountry) return
+        if (!filters.countries.includes(String(locCountry).trim())) return
+      }
+      if (filters.states && filters.states.length > 0) {
+        const locState = extractState(loc)
+        if (!locState) return
+        if (!filters.states.includes(String(locState).trim())) return
+      }
+      if (filters.distributionCenters && filters.distributionCenters.length > 0) {
+        if (!locationCodesInDCs.has(locationCode)) return
+      }
+      set.add(locationCode)
+    })
+    return set
+  }, [locations, filters.markets, filters.countries, filters.states, filters.distributionCenters, dcToLocationCodes])
+
+  // When other filters change, remove any selected location that is no longer available
+  useEffect(() => {
+    const current = filters.locations || []
+    if (current.length === 0) return
+    const kept = current.filter(code => availableLocationCodes.has(code))
+    if (kept.length !== current.length) {
+      onFiltersChange({ ...filters, locations: kept })
+    }
+  }, [availableLocationCodes, filters, onFiltersChange])
+
+  const handleLocationsSelectAll = (checked) => {
+    if (checked) {
+      onFiltersChange({ ...filters, locations: Array.from(availableLocationCodes) })
+    } else {
+      onFiltersChange({ ...filters, locations: [] })
+    }
+  }
+
   const filteredVendors = useMemo(() => {
     return vendors.filter(v => {
       // Filter by country if countries are selected
@@ -539,6 +594,23 @@ export default function FilterPanel({ locations, vendors, countries, states, mar
         </div>
         {expandedSections.locations && (
           <>
+            <div className="filter-select-all-row">
+              <label className="filter-select-all-label">
+                <input
+                  type="checkbox"
+                  checked={availableLocationCodes.size > 0 && (filters.locations || []).length === availableLocationCodes.size}
+                  ref={el => {
+                    if (el) el.indeterminate = availableLocationCodes.size > 0 && (filters.locations || []).length > 0 && (filters.locations || []).length < availableLocationCodes.size
+                  }}
+                  onChange={(e) => handleLocationsSelectAll(e.target.checked)}
+                  aria-label="Select all locations"
+                />
+                <span>Select all</span>
+              </label>
+              {availableLocationCodes.size > 0 && (
+                <span className="filter-select-all-count">({availableLocationCodes.size} location{(availableLocationCodes.size !== 1) ? 's' : ''})</span>
+              )}
+            </div>
             <input
               type="text"
               placeholder="Search locations..."

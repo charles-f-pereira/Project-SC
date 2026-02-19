@@ -16,6 +16,22 @@
   gap: 1.5rem;
 }
 
+.auto-allocation-date-tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.auto-allocation-date-tiles .date-tile {
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .auto-allocation-date-tiles {
+    grid-template-columns: 1fr;
+  }
+}
+
 .auto-allocation-section {
   background: white;
   border-radius: 8px;
@@ -71,6 +87,144 @@
   margin: 0.5rem 0 0 0;
 }
 
+.product-catalogue-actions {
+  margin-bottom: 0.5rem;
+}
+
+.th-checkbox,
+.td-checkbox {
+  width: 2.5rem;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.select-all-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.select-all-label input {
+  width: 1rem;
+  height: 1rem;
+}
+
+.global-qty-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.global-qty-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+}
+
+.apply-qty-btn {
+  padding: 0.4rem 1rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  background: var(--ct-primary, #FFD700);
+  color: var(--ct-secondary, #000);
+  border: 1px solid var(--ct-secondary, #000);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.apply-qty-btn:hover {
+  opacity: 0.95;
+}
+
+.review-table-wrap,
+.transactions-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.review-table,
+.transactions-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.review-table th,
+.review-table td,
+.transactions-table th,
+.transactions-table td {
+  padding: 0.5rem 0.6rem;
+  text-align: left;
+  border-bottom: 1px solid #eee;
+}
+
+.review-table th,
+.transactions-table th {
+  background: #f0f0f0;
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.th-indent,
+.td-indent {
+  padding-left: 1.5rem;
+}
+
+.review-table tbody tr:hover,
+.transactions-table tbody tr:hover {
+  background: #f9f9f9;
+}
+
+.review-date-input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.35rem 0.4rem;
+  font-size: 0.85rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.review-date-input:focus {
+  outline: none;
+  border-color: var(--ct-primary, #FFD700);
+}
+
+.review-qty-input {
+  width: 70px;
+  box-sizing: border-box;
+}
+
+.refresh-transactions-btn {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.9rem;
+  margin-bottom: 0.75rem;
+  background: #f0f0f0;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.refresh-transactions-btn:hover:not(:disabled) {
+  background: #e5e5e5;
+}
+
+.refresh-transactions-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 .submit-section {
   border-color: var(--ct-primary, #FFD700);
   border-width: 2px;
@@ -120,6 +274,21 @@
 .submit-order-btn:disabled {
   opacity: 0.7;
   cursor: not-allowed;
+}
+
+.review-link-p {
+  margin: 1rem 0 0 0;
+  font-size: 0.95rem;
+}
+
+.link-to-review {
+  color: #000;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.link-to-review:hover {
+  text-decoration: underline;
 }
 
 .product-search-row {

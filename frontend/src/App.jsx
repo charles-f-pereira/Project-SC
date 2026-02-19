@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import Dashboard from './pages/Dashboard.jsx'
 import AutoAllocation from './pages/AutoAllocation.jsx'
+import ReviewAutoAllocatedOrders from './pages/ReviewAutoAllocatedOrders.jsx'
 import './App.css'
 
 const COLORS = {
@@ -43,7 +44,10 @@ function App() {
     setMenuOpen(false)
   }
 
-  const pageTitle = location.pathname === '/auto-allocation' ? 'Auto Allocation' : 'Delivery Schedules'
+  const pageTitle =
+    location.pathname === '/auto-allocation' ? 'Auto Allocation' :
+    location.pathname === '/review-auto-allocated-orders' ? 'Review Auto Allocated Orders' :
+    'Delivery Schedules'
 
   return (
     <div className="app app-ct-style">
@@ -91,6 +95,13 @@ function App() {
                     >
                       Auto Allocation
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => navTo('/review-auto-allocated-orders')}
+                      className={`app-menu-item ${location.pathname === '/review-auto-allocated-orders' ? 'active' : ''}`}
+                    >
+                      Review Auto Allocated Orders
+                    </button>
                   </div>
                 </div>
               )}
@@ -106,6 +117,7 @@ function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/auto-allocation" element={<AutoAllocation />} />
+          <Route path="/review-auto-allocated-orders" element={<ReviewAutoAllocatedOrders />} />
         </Routes>
       </main>
     </div>
