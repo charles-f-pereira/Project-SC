@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -118,23 +119,26 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
         }
         for li in valid_lines
     ]
-    purchase_order_save_rows = [
-        {
-            "purchaseOrderHeaderRow": {
-                "orderStatus": "SUBMITTED",
-                "orderType": "VO",
-                "expectedDeliveryDate": ct_expected_date,
-                "locationCode": loc_code,
-                "vendorCode": body.vendor_code,
-            },
-            "purchaseOrderDetailRows": detail_rows,
-        }
-        for loc_code in body.location_codes
-    ]
-    payload = {
-        "purchaseOrderSaveRows": purchase_order_save_rows,
-        "locationCode": body.location_codes[0],
-    }
+
+    # Crunchtime allows max 1 purchase order per savePurchaseOrders call; one payload per location.
+    payloads = []
+    for loc_code in body.location_codes:
+        payloads.append({
+            "purchaseOrderSaveRows": [
+                {
+                    "purchaseOrderHeaderRow": {
+                        "orderStatus": "SUBMITTED",
+                        "orderType": "VO",
+                        "expectedDeliveryDate": ct_expected_date,
+                        "locationCode": loc_code,
+                        "vendorCode": body.vendor_code,
+                    },
+                    "purchaseOrderDetailRows": detail_rows,
+                }
+            ],
+            "locationCode": loc_code,
+        })
+
     token = service_token("purchaseorder")
     headers = {
         **ct_headers(token_override=token),
@@ -142,48 +146,49 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
         "content-type": "application/json",
     }
 
+    # One call per location, concurrently
+    order_numbers = []
     try:
         async with get_async_client() as client:
-            resp = await client.post(
-                SAVE_PURCHASE_ORDERS_PATH,
-                json=payload,
-                headers=headers,
-            )
+            tasks = [
+                client.post(SAVE_PURCHASE_ORDERS_PATH, json=payload, headers=headers)
+                for payload in payloads
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
     except httpx.HTTPError as e:
         raise HTTPException(
             status_code=502,
             detail=f"Crunchtime request failed: {e!s}",
         )
 
-    if resp.status_code != 200:
-        detail = "Crunchtime savePurchaseOrders failed."
+    for i, r in enumerate(results):
+        loc_code = body.location_codes[i]
+        if isinstance(r, Exception):
+            raise HTTPException(
+                status_code=502,
+                detail=f"Crunchtime request failed for location {loc_code}: {r!s}",
+            )
+        if r.status_code != 200:
+            detail = f"Crunchtime savePurchaseOrders failed for location {loc_code}."
+            try:
+                if r.text:
+                    detail = f"{detail} {r.text[:500]}"
+            except Exception:
+                pass
+            raise HTTPException(status_code=502, detail=detail)
         try:
-            body_text = resp.text
-            if body_text:
-                detail = body_text[:500] if len(body_text) > 500 else body_text
-        except Exception:
-            pass
-        raise HTTPException(
-            status_code=502,
-            detail=detail,
-        )
-
-    try:
-        ct_response = resp.json()
-    except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Invalid response from Crunchtime: {e!s}",
-        )
-
-    # Response: list of { orderNumber } (one per location or single object)
-    order_numbers = []
-    if isinstance(ct_response, list):
-        for item in ct_response:
-            if isinstance(item, dict) and "orderNumber" in item:
-                order_numbers.append(str(item["orderNumber"]))
-    elif isinstance(ct_response, dict) and "orderNumber" in ct_response:
-        order_numbers.append(str(ct_response["orderNumber"]))
+            data = r.json()
+            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict) and "orderNumber" in data[0]:
+                order_numbers.append(str(data[0]["orderNumber"]))
+            elif isinstance(data, dict) and "orderNumber" in data:
+                order_numbers.append(str(data["orderNumber"]))
+            else:
+                order_numbers.append(None)
+        except Exception as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Invalid response from Crunchtime for location {loc_code}: {e!s}",
+            )
 
     now_utc = datetime.now(timezone.utc)
     order_dt_sydney = _parse_order_datetime_sydney(body.order_date_time)
