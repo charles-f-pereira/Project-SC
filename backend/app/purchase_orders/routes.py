@@ -32,6 +32,9 @@ def _get_pg_connection():
         return None
 
 SAVE_PURCHASE_ORDERS_PATH = "/purchaseorder/v1/savePurchaseOrders"
+# Trigger time within this many minutes of now (Sydney) is treated as "submit now" (user has time to review)
+IMMEDIATE_WINDOW_MINUTES = 5
+MAX_SCHEDULE_DAYS = 14
 
 try:
     SYDNEY_TZ = ZoneInfo("Australia/Sydney")
@@ -87,7 +90,7 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
             status_code=503,
             detail="Timezone data unavailable. On Windows, install tzdata: pip install tzdata",
         )
-    # Order date/time must be current or future
+    # Order date/time: Sydney time; must be now or future, up to 14 days ahead
     order_dt = _parse_order_datetime_sydney(body.order_date_time)
     if not order_dt:
         raise HTTPException(
@@ -100,8 +103,21 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
             status_code=400,
             detail="Order date and time must be current or future (Sydney time AEST/AEDT).",
         )
+    from datetime import timedelta
+    max_schedule = now_sydney + timedelta(days=MAX_SCHEDULE_DAYS)
+    if order_dt > max_schedule:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order date and time cannot be more than {MAX_SCHEDULE_DAYS} days in the future (Sydney time).",
+        )
+    # Within immediate window → submit now (trigger time recorded as actual submit time)
+    immediate_threshold = now_sydney + timedelta(minutes=IMMEDIATE_WINDOW_MINUTES)
+    submit_immediately = order_dt <= immediate_threshold
 
-    # Expected delivery date must be today or future (Sydney date)
+    # Expected delivery date must be on or after order date (Sydney), and today or future
+    order_date_sydney = order_dt.date()
+    today_sydney = now_sydney.date()
+
     expected_delivery = (body.expected_delivery_date or "").strip()
     if not expected_delivery:
         raise HTTPException(status_code=400, detail="Expected delivery date is required.")
@@ -112,7 +128,11 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
             status_code=400,
             detail="Expected delivery date must be YYYY-MM-DD.",
         )
-    today_sydney = now_sydney.date()
+    if delivery_date < order_date_sydney:
+        raise HTTPException(
+            status_code=400,
+            detail="Expected delivery date cannot be before the order date & time.",
+        )
     if delivery_date < today_sydney:
         raise HTTPException(
             status_code=400,
@@ -133,6 +153,8 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                 raise HTTPException(status_code=400, detail=f"Expected delivery date required for location index {i}.")
             try:
                 d = datetime.strptime(ed, "%Y-%m-%d").date()
+                if d < order_date_sydney:
+                    raise HTTPException(status_code=400, detail=f"Expected delivery date for location index {i} cannot be before the order date & time.")
                 if d < today_sydney:
                     raise HTTPException(status_code=400, detail=f"Expected delivery date for location index {i} must be today or future.")
             except ValueError:
@@ -195,61 +217,62 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
         per_location_valid_lines.append(valid_lines)
         per_location_expected_dates.append(loc_expected)
 
-    token = service_token("purchaseorder")
-    headers = {
-        **ct_headers(token_override=token),
-        "accept": "application/json",
-        "content-type": "application/json",
-    }
-
-    # One call per location, concurrently
     order_numbers = []
-    try:
-        async with get_async_client() as client:
-            tasks = [
-                client.post(SAVE_PURCHASE_ORDERS_PATH, json=payload, headers=headers)
-                for payload in payloads
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-    except httpx.HTTPError as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Crunchtime request failed: {e!s}",
-        )
-
-    for i, r in enumerate(results):
-        loc_code = body.location_codes[i]
-        if isinstance(r, Exception):
-            raise HTTPException(
-                status_code=502,
-                detail=f"Crunchtime request failed for location {loc_code}: {r!s}",
-            )
-        if r.status_code != 200:
-            detail = f"Crunchtime savePurchaseOrders failed for location {loc_code}."
-            try:
-                if r.text:
-                    detail = f"{detail} {r.text[:500]}"
-            except Exception:
-                pass
-            raise HTTPException(status_code=502, detail=detail)
-        try:
-            data = r.json()
-            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict) and "orderNumber" in data[0]:
-                order_numbers.append(str(data[0]["orderNumber"]))
-            elif isinstance(data, dict) and "orderNumber" in data:
-                order_numbers.append(str(data["orderNumber"]))
-            else:
-                order_numbers.append(None)
-        except Exception as e:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Invalid response from Crunchtime for location {loc_code}: {e!s}",
-            )
-
     now_utc = datetime.now(timezone.utc)
-    order_dt_sydney = _parse_order_datetime_sydney(body.order_date_time)
-    set_order_utc = order_dt_sydney.astimezone(timezone.utc) if order_dt_sydney else now_utc
-    expected_dow = _day_of_week_abbrev(body.expected_delivery_date)
+    if submit_immediately:
+        token = service_token("purchaseorder")
+        headers = {
+            **ct_headers(token_override=token),
+            "accept": "application/json",
+            "content-type": "application/json",
+        }
+        try:
+            async with get_async_client() as client:
+                tasks = [
+                    client.post(SAVE_PURCHASE_ORDERS_PATH, json=payload, headers=headers)
+                    for payload in payloads
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+        except httpx.HTTPError as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Crunchtime request failed: {e!s}",
+            )
+        for i, r in enumerate(results):
+            loc_code = body.location_codes[i]
+            if isinstance(r, Exception):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Crunchtime request failed for location {loc_code}: {r!s}",
+                )
+            if r.status_code != 200:
+                detail = f"Crunchtime savePurchaseOrders failed for location {loc_code}."
+                try:
+                    if r.text:
+                        detail = f"{detail} {r.text[:500]}"
+                except Exception:
+                    pass
+                raise HTTPException(status_code=502, detail=detail)
+            try:
+                data = r.json()
+                if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict) and "orderNumber" in data[0]:
+                    order_numbers.append(str(data[0]["orderNumber"]))
+                elif isinstance(data, dict) and "orderNumber" in data:
+                    order_numbers.append(str(data["orderNumber"]))
+                else:
+                    order_numbers.append(None)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Invalid response from Crunchtime for location {loc_code}: {e!s}",
+                )
+
+    # For immediate: trigger time recorded as actual submit time (UTC). For scheduled: use user-selected time (UTC).
+    if submit_immediately:
+        set_order_utc = now_utc
+    else:
+        order_dt_sydney = _parse_order_datetime_sydney(body.order_date_time)
+        set_order_utc = order_dt_sydney.astimezone(timezone.utc) if order_dt_sydney else now_utc
 
     # Persist to CTH (one header per location; reuse order_number by index or single for all)
     location_details_list = body.location_details or []
@@ -264,6 +287,10 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                 password=PG_PASSWORD,
             )
             cur = conn.cursor()
+            status_val = "SUBMITTED" if submit_immediately else "SCHEDULED"
+            submitted_dt = now_utc if submit_immediately else None
+            submission_attempts_val = 1 if submit_immediately else 0
+            last_attempt_at_val = now_utc if submit_immediately else None
             for i, loc_code in enumerate(body.location_codes):
                 trans_no = order_numbers[i] if i < len(order_numbers) else (order_numbers[0] if order_numbers else None)
                 loc_detail = location_details_list[i] if i < len(location_details_list) else None
@@ -281,15 +308,17 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                         country, state, "locationCode", "locationName", market,
                         "vendorCode", "vendorName", "distributionCenter",
                         "createDateTime", "setOrderDateTme", "setExpectedDeliveryDate",
-                        "setExpectedDeliveryDOW", "submittedDateTime", "transactionNo"
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        "setExpectedDeliveryDOW", "submittedDateTime", "transactionNo",
+                        status, "submission_attempts", "last_attempt_at", "failure_reason", "alert_sent_at"
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING "autoAllocateTransID"
                     """,
                     (
                         country, state, loc_code, location_name, market,
                         body.vendor_code, vendor_name, None,
                         now_utc, set_order_utc, loc_expected_date,
-                        expected_dow, now_utc, trans_no,
+                        expected_dow, submitted_dt, trans_no,
+                        status_val, submission_attempts_val, last_attempt_at_val, None, None,
                     ),
                 )
                 row = cur.fetchone()
@@ -300,10 +329,10 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                             """
                             INSERT INTO "CTH"."autoAllocationTransDtl" (
                                 "autoAllocateTransID", "productNumber", "productName",
-                                "vendorUnit", "orderQuantity"
-                            ) VALUES (%s, %s, %s, %s, %s)
+                                "vendorUnit", "orderQuantity", "vendorProductNumber"
+                            ) VALUES (%s, %s, %s, %s, %s, %s)
                             """,
-                            (hdr_id, None if not li.product_number else li.product_number, li.product_name, li.vendor_unit or "", li.qty),
+                            (hdr_id, None if not li.product_number else li.product_number, li.product_name, li.vendor_unit or "", li.qty, li.vendor_product_number or ""),
                         )
             conn.commit()
             cur.close()
@@ -313,9 +342,13 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
             pass
 
     total_lines = sum(len(v) for v in per_location_valid_lines)
+    if submit_immediately:
+        message = "Order submitted successfully." + (f" Order number(s): {', '.join(order_numbers)}" if order_numbers else "")
+    else:
+        message = f"Order scheduled for {body.order_date_time} (Sydney). It will be sent to the vendor at that time."
     return PurchaseOrderSubmitResponse(
         success=True,
-        message="Order submitted successfully." + (f" Order number(s): {', '.join(order_numbers)}" if order_numbers else ""),
+        message=message,
         order_date_time=body.order_date_time,
         expected_delivery_date=body.expected_delivery_date,
         location_count=len(body.location_codes),
@@ -414,6 +447,7 @@ def get_transactions(
     from_date: str | None = Query(None, description="Filter expected delivery from (YYYY-MM-DD)"),
     to_date: str | None = Query(None, description="Filter expected delivery to (YYYY-MM-DD)"),
     po_number: str | None = Query(None, alias="po", description="Filter by PO number (partial match)"),
+    not_submitted: bool = Query(False, description="If true, only return orders not yet submitted (status != 'SUBMITTED')"),
 ):
     """
     List Auto Allocation transactions from PostgreSQL (CTH.autoAllocationTransHdr).
@@ -439,7 +473,9 @@ def get_transactions(
                 "setOrderDateTme",
                 "submittedDateTime",
                 "transactionNo",
-                "confirmReceivedStatus"
+                "confirmReceivedStatus",
+                status,
+                "alert_sent_at"
             FROM "CTH"."autoAllocationTransHdr"
             WHERE 1=1
         """
@@ -465,7 +501,9 @@ def get_transactions(
         if po_number and po_number.strip():
             params.append(f"%{po_number.strip()}%")
             sql += " AND \"transactionNo\" ILIKE %s"
-        sql += " ORDER BY \"transactionNo\" DESC NULLS LAST LIMIT %s OFFSET %s"
+        if not_submitted:
+            sql += " AND status != 'SUBMITTED'"
+        sql += " ORDER BY (CASE WHEN status = 'SUBMITTED' THEN 1 ELSE 0 END), \"transactionNo\" DESC NULLS LAST, \"setOrderDateTme\" DESC NULLS LAST LIMIT %s OFFSET %s"
         params.extend([limit, offset])
         cur.execute(sql, params)
         rows = cur.fetchall()
@@ -473,7 +511,7 @@ def get_transactions(
         data = []
         for row in rows:
             rec = dict(zip(colnames, row))
-            for key in ("setExpectedDeliveryDate", "setOrderDateTme", "submittedDateTime"):
+            for key in ("setExpectedDeliveryDate", "setOrderDateTme", "submittedDateTime", "alert_sent_at"):
                 if key in rec and rec[key] is not None:
                     v = rec[key]
                     if hasattr(v, "isoformat"):

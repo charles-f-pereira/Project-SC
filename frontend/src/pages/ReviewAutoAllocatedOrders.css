@@ -142,6 +142,17 @@
   font-weight: 500;
 }
 
+.review-filter-checkbox-label {
+  flex-direction: row;
+  align-items: center;
+  cursor: pointer;
+}
+.review-filter-checkbox-label .review-filter-checkbox {
+  width: 1rem;
+  height: 1rem;
+  margin-right: 0.35rem;
+}
+
 .review-filter-select,
 .review-filter-input {
   padding: 0.4rem 0.5rem;

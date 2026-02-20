@@ -5,6 +5,7 @@
 CREATE SCHEMA IF NOT EXISTS "CTH";
 
 -- Header: one row per location (Crunchtime savePurchaseOrders is called per location; each location gets a unique autoAllocateTransID)
+-- status: SCHEDULED=awaiting trigger; SUBMITTED=sent to Crunchtime; FAILED=final failure after retries.
 -- Columns without NOT NULL allow NULL. Future-use columns (submitUserId, vendorEdiFlag, confirmReceivedStatus, confirmRecievedDateTime) and distributionCenter allow NULL.
 CREATE TABLE "CTH"."autoAllocationTransHdr" (
     "autoAllocateTransID"   BIGSERIAL PRIMARY KEY,
@@ -22,6 +23,11 @@ CREATE TABLE "CTH"."autoAllocationTransHdr" (
     "setExpectedDeliveryDOW"  VARCHAR(3) NULL,
     "submittedDateTime"     TIMESTAMPTZ NULL,
     "transactionNo"         VARCHAR(100) NULL,
+    status                  VARCHAR(20) NOT NULL DEFAULT 'SCHEDULED',
+    "submission_attempts"   INTEGER NOT NULL DEFAULT 0,
+    "last_attempt_at"       TIMESTAMPTZ NULL,
+    "failure_reason"        TEXT NULL,
+    "alert_sent_at"         TIMESTAMPTZ NULL,
     "submitUserId"          VARCHAR(100) NULL,
     "vendorEdiFlag"         VARCHAR(10) NULL,
     "confirmReceivedStatus" VARCHAR(50) NULL,
@@ -38,13 +44,19 @@ COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."submitUserId" IS 'Reserved: us
 COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."vendorEdiFlag" IS 'Reserved: EDI workflow control.';
 COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."confirmReceivedStatus" IS 'Reserved: PO status for EDI vendors.';
 COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."confirmRecievedDateTime" IS 'Reserved: status change timestamp (UTC).';
+COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."status" IS 'SCHEDULED=waiting for trigger; SUBMITTED=sent to Crunchtime; FAILED=final failure after retries.';
+COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."submission_attempts" IS 'Number of Crunchtime submission attempts.';
+COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."last_attempt_at" IS 'UTC timestamp of last submission attempt.';
+COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."failure_reason" IS 'Last error message when status=FAILED.';
+COMMENT ON COLUMN "CTH"."autoAllocationTransHdr"."alert_sent_at" IS 'When a failure alert was sent (future use).';
 
--- Detail: line items (products) per header; productNumber, productName, vendorUnit allow NULL (vendorCode removed; vendor is on header)
+-- Detail: line items (products) per header; productNumber, productName, vendorUnit, vendorProductNumber allow NULL (vendor is on header)
 CREATE TABLE "CTH"."autoAllocationTransDtl" (
     "autoAllocateItmTransID" BIGSERIAL PRIMARY KEY,
     "autoAllocateTransID"    BIGINT NOT NULL REFERENCES "CTH"."autoAllocationTransHdr"("autoAllocateTransID") ON DELETE CASCADE,
     "productNumber"         VARCHAR(100) NULL,
     "productName"           VARCHAR(255) NULL,
+    "vendorProductNumber"   VARCHAR(100) NULL,
     "vendorUnit"            VARCHAR(100) NULL,
     "orderQuantity"         INTEGER NOT NULL
 );
@@ -54,6 +66,11 @@ CREATE TABLE "CTH"."autoAllocationTransDtl" (
 
 COMMENT ON TABLE "CTH"."autoAllocationTransDtl" IS 'Auto Allocation transaction detail: product lines per header.';
 COMMENT ON COLUMN "CTH"."autoAllocationTransDtl"."autoAllocateTransID" IS 'FK to autoAllocationTransHdr.';
+COMMENT ON COLUMN "CTH"."autoAllocationTransDtl"."vendorProductNumber" IS 'Vendor product number for Crunchtime savePurchaseOrders replay.';
 
 CREATE INDEX idx_autoAllocationTransDtl_autoAllocateTransID
     ON "CTH"."autoAllocationTransDtl"("autoAllocateTransID");
+
+CREATE INDEX idx_autoAllocationTransHdr_status_setOrderDateTme
+    ON "CTH"."autoAllocationTransHdr"(status, "setOrderDateTme")
+    WHERE status = 'SCHEDULED';

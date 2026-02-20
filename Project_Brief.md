@@ -42,6 +42,7 @@ The following is in place or in progress for Project SC:
 - **API Integration**: 
   - Crunchtime API endpoints (reuse connection patterns from Project-CT)
   - Public Holidays API (api-ninjas.com)
+- **Scheduling**: APScheduler runs inside the FastAPI process; a job every 2 minutes processes SCHEDULED purchase orders (submits to Crunchtime when trigger time has passed, with 5×5‑minute retries on failure).
 - **Structure**: 
   - `/backend/app/core/` - Configuration and API clients
   - `/backend/app/schedules/` - Schedule management routes
@@ -50,6 +51,7 @@ The following is in place or in progress for Project SC:
   - `/backend/app/holidays/` - Public holiday integration
   - `/backend/app/products/` - Product catalog (Phase 1; getAllCompanyProductsEnhancedV1, getAllVendorProductPricing)
   - `/backend/app/purchase_orders/` - Purchase order processing (Phase 1; savePurchaseOrders)
+  - `/backend/app/scheduler.py` - Scheduled PO job (APScheduler)
 
 ### Frontend (React + Vite)
 - **Framework**: React with Vite (consistent with Project-CT vendor_frontend)
@@ -80,14 +82,16 @@ Transactional records for Auto Allocation submissions are persisted in PostgreSQ
 
 | Table | Purpose |
 |-------|--------|
-| `CTH.autoAllocationTransHdr` | One row **per location**. Auto Allocation may generate multiple locations in one batch; submission to Crunchtime `savePurchaseOrders` is done per location; each location gets a unique `autoAllocateTransID`. Each row stores: **country, state, locationCode, locationName, market** (from the selected location, sent by the frontend in `location_details`); **vendorCode, vendorName** (vendor name from frontend); distribution centre; `createDateTime` (UTC); `setOrderDateTme` (UTC); `setExpectedDeliveryDate`, `setExpectedDeliveryDOW`; `submittedDateTime` (UTC); `transactionNo` from Crunchtime `orderNumber`. Future: `submitUserId`, `vendorEdiFlag`, `confirmReceivedStatus`, `confirmRecievedDateTime`. |
-| `CTH.autoAllocationTransDtl` | Line items per header: **productNumber** (company product number), product name, vendor unit, order quantity. Vendor is on the header only (no vendorCode column in detail). `autoAllocateTransID` references `autoAllocationTransHdr.autoAllocateTransID`. |
+| `CTH.autoAllocationTransHdr` | One row **per location**. Auto Allocation may generate multiple locations in one batch; submission to Crunchtime `savePurchaseOrders` is done per location; each location gets a unique `autoAllocateTransID`. Each row stores: **country, state, locationCode, locationName, market** (from the selected location, sent by the frontend in `location_details`); **vendorCode, vendorName** (vendor name from frontend); distribution centre; `createDateTime` (UTC); `setOrderDateTme` (UTC); `setExpectedDeliveryDate`, `setExpectedDeliveryDOW`; `submittedDateTime` (UTC); `transactionNo` from Crunchtime `orderNumber`. **Workflow:** `status` (`SCHEDULED` | `SUBMITTED` | `FAILED`); `submission_attempts`, `last_attempt_at`, `failure_reason` (for retries and future alerting); `alert_sent_at` (when a failure alert was sent; reserved for future use). Future: `submitUserId`, `vendorEdiFlag`, `confirmReceivedStatus`, `confirmRecievedDateTime`. |
+| `CTH.autoAllocationTransDtl` | Line items per header: **productNumber** (company product number), product name, vendor unit, order quantity, **vendorProductNumber** (for Crunchtime replay when submitting scheduled POs). Vendor is on the header only (no vendorCode column in detail). `autoAllocateTransID` references `autoAllocationTransHdr.autoAllocateTransID`. |
 
 - **Timestamps:** All stored in UTC. The front end displays order date/time in AEST/AEDT; `setOrderDateTme` is stored in UTC.
 - **Multi-location:** The Auto Allocation flow can select multiple locations and one vendor/product set. When submitting via `https://webservices-test.net-chef.com/purchaseorder/v1/savePurchaseOrders` (when implemented), the backend will call the Crunchtime API **per location**. Each such submission is persisted as a separate header row (unique `autoAllocateTransID`) with that location’s code/name and its associated detail rows. So `locationCode` and `locationName` in each header row hold a single location; multiple locations result in multiple header rows.
 - **Crunchtime:** After each successful per-location call to `savePurchaseOrders`, the response `orderNumber` is recorded in that header’s `transactionNo`.
 
-**SQL script:** [`backend/sql/cth_auto_allocation_tables.sql`](backend/sql/cth_auto_allocation_tables.sql) — run against the database to create the schema and tables.
+**Order date/time (trigger time):** Order date/time is interpreted as **Sydney time (AEST/AEDT)** and is the time when the order is sent to the vendor (or shortly after). The user can schedule up to **14 days ahead**. If the chosen time is within **5 minutes of “now”** (Sydney), the backend treats it as **submit now**: it calls Crunchtime immediately and records the row with `status = SUBMITTED` and `setOrderDateTme` = actual submit time (UTC). If the chosen time is later, the row is stored with `status = SCHEDULED` and `setOrderDateTme` = that time in UTC; a background job (APScheduler inside the FastAPI app) runs every 2 minutes and submits those rows to Crunchtime when `setOrderDateTme <= now` (UTC). Failed submissions are retried up to **5 times**, **5 minutes apart**; after 5 failures the row is set to `status = FAILED` with `failure_reason` and `last_attempt_at` (for future alerting). The `alert_sent_at` column is reserved for when a failure alert is sent.
+
+**SQL script:** [`backend/sql/cth_auto_allocation_tables.sql`](backend/sql/cth_auto_allocation_tables.sql) — run against the database to create the schema and tables. For existing databases, [`backend/sql/migrate_scheduled_po_columns.sql`](backend/sql/migrate_scheduled_po_columns.sql) adds the workflow and replay columns.
 
 ## Crunchtime API Endpoints
 
@@ -303,6 +307,7 @@ Project SC/
 - pydantic (data validation)
 - python-dotenv (environment management)
 - truststore (Windows SSL support)
+- apscheduler (scheduled PO submission job inside FastAPI)
 
 ### Frontend
 - React 18+

@@ -67,6 +67,13 @@
   box-shadow: 0 0 0 2px rgba(255, 215, 0, 0.25);
 }
 
+.order-datetime-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .order-datetime-section .order-datetime-input {
   padding: 0.5rem 0.75rem;
   font-size: 1rem;
@@ -260,15 +267,13 @@
   font-weight: 600;
   background: var(--ct-primary, #FFD700);
   color: var(--ct-secondary, #000);
-  border: 2px solid var(--ct-secondary, #000);
+  border: 1px solid var(--ct-secondary, #000);
   border-radius: 6px;
   cursor: pointer;
-  transition: opacity 0.2s, background-color 0.2s;
 }
 
 .submit-order-btn:hover:not(:disabled) {
   opacity: 0.95;
-  background: #ffe44d;
 }
 
 .submit-order-btn:disabled {

@@ -16,7 +16,8 @@ export default function ReviewAutoAllocatedOrders() {
     location: '',
     fromDate: '',
     toDate: '',
-    poNumber: ''
+    poNumber: '',
+    notSubmitted: false
   })
   const [popup, setPopup] = useState(null)
 
@@ -36,6 +37,7 @@ export default function ReviewAutoAllocatedOrders() {
     if (filters.fromDate) params.from_date = filters.fromDate
     if (filters.toDate) params.to_date = filters.toDate
     if (filters.poNumber && filters.poNumber.trim()) params.po = filters.poNumber.trim()
+    if (filters.notSubmitted) params.not_submitted = true
     client.get('/api/purchase-orders/transactions', { params })
       .then(res => setTransactions(res.data?.data || []))
       .catch(() => setTransactions([]))
@@ -55,7 +57,7 @@ export default function ReviewAutoAllocatedOrders() {
   }
 
   const clearFilters = () => {
-    setFilters({ state: '', market: '', vendor: '', location: '', fromDate: '', toDate: '', poNumber: '' })
+    setFilters({ state: '', market: '', vendor: '', location: '', fromDate: '', toDate: '', poNumber: '', notSubmitted: false })
     setLoading(true)
     client.get('/api/purchase-orders/transactions', { params: { limit: DEFAULT_LIMIT, offset: 0 } })
       .then(res => setTransactions(res.data?.data || []))
@@ -171,6 +173,16 @@ export default function ReviewAutoAllocatedOrders() {
                   className="review-filter-input"
                 />
               </label>
+              <label className="review-filter-label review-filter-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={filters.notSubmitted}
+                  onChange={(e) => setFilters(f => ({ ...f, notSubmitted: e.target.checked }))}
+                  className="review-filter-checkbox"
+                  aria-label="Show only orders not yet submitted"
+                />
+                <span>Not yet submitted</span>
+              </label>
             </div>
             <div className="review-filters-actions">
               <button type="button" onClick={applyFilters} disabled={loading} className="review-filter-btn apply">Apply</button>
@@ -210,8 +222,8 @@ export default function ReviewAutoAllocatedOrders() {
                     <td>{tx.locationName ?? tx.locationCode ?? '—'}</td>
                     <td>{tx.setExpectedDeliveryDate ? String(tx.setExpectedDeliveryDate).slice(0, 10) : '—'}</td>
                     <td>{tx.setExpectedDeliveryDOW ?? '—'}</td>
-                    <td>{tx.setOrderDateTme ? new Date(tx.setOrderDateTme).toLocaleString() : '—'}</td>
-                    <td>{tx.submittedDateTime ? new Date(tx.submittedDateTime).toLocaleString() : '—'}</td>
+                    <td>{tx.setOrderDateTme ? new Date(tx.setOrderDateTme).toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : '—'}</td>
+                    <td>{tx.submittedDateTime ? new Date(tx.submittedDateTime).toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : '—'}</td>
                     <td>
                       {tx.transactionNo ? (
                         <button

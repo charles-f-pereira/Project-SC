@@ -122,6 +122,28 @@ function getNowSydneyLocal() {
   return `${year}-${month}-${day}T${hour}:${minute}`
 }
 
+/** Max order date/time: 14 days from now in Sydney, same format as datetime-local (YYYY-MM-DDTHH:mm) */
+function getMaxOrderDateTimeSydney() {
+  const d = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: SYDNEY_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  })
+  const parts = formatter.formatToParts(d)
+  const get = (type) => parts.find(p => p.type === type)?.value ?? ''
+  const year = get('year')
+  const month = get('month').padStart(2, '0')
+  const day = get('day').padStart(2, '0')
+  const hour = get('hour').padStart(2, '0')
+  const minute = get('minute').padStart(2, '0')
+  return `${year}-${month}-${day}T${hour}:${minute}`
+}
+
 /** Today's date in Sydney as YYYY-MM-DD for date inputs and validation. */
 function getTodaySydneyDate() {
   const d = new Date()
@@ -134,6 +156,20 @@ function getTodaySydneyDate() {
   const parts = formatter.formatToParts(d)
   const get = (type) => parts.find(p => p.type === type)?.value ?? ''
   return `${get('year')}-${get('month').padStart(2, '0')}-${get('day').padStart(2, '0')}`
+}
+
+/** Date part of order date/time (YYYY-MM-DD) for min expected delivery. Order date/time is Sydney. */
+function getOrderDatePart(orderDateTime) {
+  const s = (orderDateTime || '').trim().slice(0, 10)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+  return null
+}
+
+/** Min expected delivery date: order date if set, otherwise today (Sydney). */
+function getMinExpectedDeliveryDate(orderDateTime) {
+  const orderDate = getOrderDatePart(orderDateTime)
+  if (orderDate) return orderDate
+  return getTodaySydneyDate()
 }
 
 export default function AutoAllocation() {
@@ -376,8 +412,16 @@ export default function AutoAllocation() {
     [products, showAltItems]
   )
 
+  /** Uniqueness key for duplicate check: vendor product number + vendor unit. */
+  const lineItemKey = (item) => `${String(item.vendorProductNumber ?? '').trim()}|${String(item.vendorUnit ?? '').trim()}`
+
   const addProductToTable = (product) => {
     if (lineItems.length >= MAX_PRODUCT_LINES) return
+    const vpn = String((product.vendorProductNumber || product.vendorProductNo) ?? '').trim()
+    const vu = String((product.vendorUnit || product.unit) ?? '').trim()
+    const key = `${vpn}|${vu}`
+    const alreadyExists = lineItems.some(li => lineItemKey(li) === key)
+    if (alreadyExists) return
     const id = `${product.vendorProductNumber || product.id || Date.now()}-${lineItems.length}`
     const newItem = {
       id,
@@ -393,9 +437,16 @@ export default function AutoAllocation() {
   const addSelectedProductsToTable = () => {
     const toAdd = productDisplayRows.filter(r => productSelection.has(r.id))
     setLineItems(prev => {
+      const existingKeys = new Set(prev.map(li => lineItemKey(li)))
       let next = [...prev]
+      const seenKeys = new Set(existingKeys)
       toAdd.forEach((p, idx) => {
         if (next.length >= MAX_PRODUCT_LINES) return
+        const vpn = String(p.vendorProductNumber ?? '').trim()
+        const vu = String(p.vendorUnit ?? '').trim()
+        const key = `${vpn}|${vu}`
+        if (seenKeys.has(key)) return
+        seenKeys.add(key)
         const id = `${p.vendorProductNumber || p.id || Date.now()}-${idx}-${next.length}`
         next = [...next, {
           id,
@@ -534,9 +585,10 @@ export default function AutoAllocation() {
       setSubmitResult({ success: false, message: 'Set the expected delivery date.' })
       return
     }
-    const todaySydney = getTodaySydneyDate()
-    if (expectedDeliveryDate < todaySydney) {
-      setSubmitResult({ success: false, message: 'Expected delivery date must be today or in the future.' })
+    const orderDatePart = getOrderDatePart(orderDateTime)
+    const minDeliveryDate = orderDatePart || getTodaySydneyDate()
+    if (expectedDeliveryDate < minDeliveryDate) {
+      setSubmitResult({ success: false, message: 'Expected delivery date cannot be before the order date & time.' })
       return
     }
     if (!orderDateTime.trim()) {
@@ -570,11 +622,10 @@ export default function AutoAllocation() {
     const expected_delivery_dates = locationCodesOrdered.map(
       locCode => locationExpectedDelivery[locCode] ?? expectedDeliveryDate
     )
-    const todayForValidation = getTodaySydneyDate()
     for (let i = 0; i < expected_delivery_dates.length; i++) {
       const ed = expected_delivery_dates[i]
-      if (!ed || ed < todayForValidation) {
-        setSubmitResult({ success: false, message: `Expected delivery date for location ${locationCodesOrdered[i]} must be today or in the future.` })
+      if (!ed || ed < minDeliveryDate) {
+        setSubmitResult({ success: false, message: `Expected delivery date for location ${locationCodesOrdered[i]} cannot be before the order date & time.` })
         return
       }
     }
@@ -664,22 +715,32 @@ export default function AutoAllocation() {
             <section className="auto-allocation-section order-datetime-section date-tile">
               <h2>Order date & time</h2>
               <p className="section-note">When the order should be placed or scheduled. Must be current or future.</p>
-              <input
-                type="datetime-local"
-                value={orderDateTime}
-                onChange={(e) => setOrderDateTime(e.target.value)}
-                min={getNowSydneyLocal()}
-                className="order-datetime-input"
-              />
+              <div className="order-datetime-row">
+                <input
+                  type="datetime-local"
+                  value={orderDateTime}
+                  onChange={(e) => setOrderDateTime(e.target.value)}
+                  min={getNowSydneyLocal()}
+                  max={getMaxOrderDateTimeSydney()}
+                  className="order-datetime-input"
+                />
+                <button
+                  type="button"
+                  onClick={() => setOrderDateTime(getNowSydneyLocal())}
+                  className="product-search-btn"
+                >
+                  Now
+                </button>
+              </div>
             </section>
             <section className="auto-allocation-section expected-delivery-section date-tile">
               <h2>Expected delivery date</h2>
-              <p className="section-note">Select the date by when products should be delivered to the selected locations. Must be today or in the future.</p>
+              <p className="section-note">Select the date by when products should be delivered to the selected locations. Must be on or after the order date & time.</p>
               <input
                 type="date"
                 value={expectedDeliveryDate}
                 onChange={(e) => setExpectedDeliveryDate(e.target.value)}
-                min={getTodaySydneyDate()}
+                min={getMinExpectedDeliveryDate(orderDateTime)}
                 className="expected-delivery-date-input"
               />
             </section>
@@ -706,6 +767,15 @@ export default function AutoAllocation() {
               >
                 {productsLoading ? 'Searching...' : 'Search'}
               </button>
+              <button
+                type="button"
+                onClick={addSelectedProductsToTable}
+                disabled={productDisplayRows.length === 0 || productSelection.size === 0 || lineItems.length >= MAX_PRODUCT_LINES}
+                className="product-search-btn"
+                title="Add selected products to order lines"
+              >
+                Add selected
+              </button>
             </div>
             <div className="product-show-alt-row">
               <label className="product-show-alt-label">
@@ -730,17 +800,6 @@ export default function AutoAllocation() {
               )}
               {productDisplayRows.length > 0 && (
                 <>
-                  <div className="product-catalogue-actions">
-                    <button
-                      type="button"
-                      onClick={addSelectedProductsToTable}
-                      disabled={productSelection.size === 0 || lineItems.length >= MAX_PRODUCT_LINES}
-                      className="add-product-btn"
-                      title="Add selected products to order lines"
-                    >
-                      Add selected
-                    </button>
-                  </div>
                   <table className="product-catalogue-table">
                     <thead>
                       <tr>
@@ -930,7 +989,7 @@ export default function AutoAllocation() {
                             type="date"
                             value={rowExpectedDate}
                             onChange={(e) => setReviewExpectedDate(row.locationCode, e.target.value)}
-                            min={getTodaySydneyDate()}
+                            min={getMinExpectedDeliveryDate(orderDateTime)}
                             className="review-date-input"
                             aria-label={`Expected delivery date for ${row.locationName}`}
                           />

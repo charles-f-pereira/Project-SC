@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
 
+from apscheduler.schedulers.background import BackgroundScheduler
+
 from app.core import CT_ENV, BASE_URL
 from app.locations.routes import router as locations_router
 from app.vendors.routes import router as vendors_router
@@ -9,11 +11,15 @@ from app.schedules.routes import router as schedules_router
 from app.holidays.routes import router as holidays_router
 from app.purchase_orders.routes import router as purchase_orders_router
 from app.products.routes import router as products_router
+from app.scheduler import run_scheduled_po_job
 
 app = FastAPI(
     title="Project SC API",
     description="Ordering & Delivery Schedule Administration"
 )
+
+_scheduler = BackgroundScheduler()
+_scheduler.add_job(run_scheduled_po_job, "interval", minutes=1, id="scheduled_po")
 
 # Allow the Vite dev server to call us
 app.add_middleware(
@@ -35,6 +41,14 @@ app.add_middleware(
 async def _startup_banner():
     print(f"[startup] Project SC API starting (env: {CT_ENV}, base: {BASE_URL})")
     print("[startup] Routers: locations, vendors, schedules, holidays, purchase_orders, products")
+    _scheduler.start()
+    print("[startup] APScheduler started (scheduled PO job every 2 min)")
+
+
+@app.on_event("shutdown")
+def _shutdown_scheduler():
+    _scheduler.shutdown(wait=False)
+    print("[shutdown] APScheduler stopped")
 
 # Health check
 @app.get("/api/health")
