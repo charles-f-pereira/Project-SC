@@ -1,8 +1,8 @@
 from fastapi import APIRouter, HTTPException, Query
-from typing import List, Optional
+from typing import Optional
 import httpx
 from app.core.crunchtime_api import ct_headers, service_token, BASE_URL
-from .schemas import ScheduleResponse, ScheduleFilter
+from .schemas import ScheduleResponse
 
 router = APIRouter()
 
@@ -15,7 +15,13 @@ def _normalize_vendor_location_response(data) -> list:
     if isinstance(data, list):
         items = data
     elif isinstance(data, dict):
-        for key in ("data", "vendorLocations", "VendorLocations", "locations", "Locations"):
+        for key in (
+            "data",
+            "vendorLocations",
+            "VendorLocations",
+            "locations",
+            "Locations",
+        ):
             val = data.get(key)
             if isinstance(val, list):
                 items = val
@@ -34,12 +40,30 @@ def _flatten_vendor_location_item(raw: dict) -> dict:
     - vendorLocationScheduleDetail: single object (or array) with orderDay*Flag, orderByTime*, deliverDay*
     Flatten to { locationCode, vendorCode, vendorLocationScheduleDetail: list } for frontend.
     """
-    header = raw.get("vendorLocationHeaderDetails") or raw.get("VendorLocationHeaderDetails") or {}
-    detail = raw.get("vendorLocationScheduleDetail") or raw.get("VendorLocationScheduleDetail")
+    header = (
+        raw.get("vendorLocationHeaderDetails")
+        or raw.get("VendorLocationHeaderDetails")
+        or {}
+    )
+    detail = raw.get("vendorLocationScheduleDetail") or raw.get(
+        "VendorLocationScheduleDetail"
+    )
     overrides = raw.get("scheduleOverrideRowList") or raw.get("ScheduleOverrideRowList")
 
-    location_code = header.get("locationCode") or header.get("LocationCode") or raw.get("locationCode") or raw.get("LocationCode") or ""
-    vendor_code = header.get("vendorCode") or header.get("VendorCode") or raw.get("vendorCode") or raw.get("VendorCode") or ""
+    location_code = (
+        header.get("locationCode")
+        or header.get("LocationCode")
+        or raw.get("locationCode")
+        or raw.get("LocationCode")
+        or ""
+    )
+    vendor_code = (
+        header.get("vendorCode")
+        or header.get("VendorCode")
+        or raw.get("vendorCode")
+        or raw.get("VendorCode")
+        or ""
+    )
 
     if isinstance(detail, list):
         detail_list = detail
@@ -73,16 +97,18 @@ CT_VENDOR_LOCATION_FIXED_PARAMS = {
 
 @router.get("/vendor-locations", response_model=ScheduleResponse)
 async def get_vendor_locations(
-    locationCode: Optional[str] = Query(None, description="Single location code (for single-location call)"),
+    locationCode: Optional[str] = Query(
+        None, description="Single location code (for single-location call)"
+    ),
 ):
     """
     Get vendor-location schedules from Crunchtime getAllVendorLocation.
-    
+
     Single-location logic: pass exactly one locationCode. Crunchtime returns all vendors
     for that location, each with vendorLocationScheduleDetail (and scheduleOverrideRowList for overrides).
-    
+
     Always sends: activeFlag=true, includeDetails=true, includeNull=false.
-    
+
     Schedule detail: orderDay*Flag, orderByTime*, deliverDay* (1=Sun..7=Sat, 8=Sun next week..21=Sat week+2).
     """
     params = dict(CT_VENDOR_LOCATION_FIXED_PARAMS)
@@ -113,25 +139,39 @@ async def get_vendor_locations(
                 async with httpx.AsyncClient(base_url=BASE_URL, timeout=30.0) as client:
                     resp = await client.get(
                         path_alt,
-                        headers=ct_headers(token_override=service_token("vendorlocation")),
+                        headers=ct_headers(
+                            token_override=service_token("vendorlocation")
+                        ),
                         params=params,
                     )
                     resp.raise_for_status()
                     data = resp.json()
                     raw_items = _normalize_vendor_location_response(data)
                     items = [_flatten_vendor_location_item(it) for it in raw_items]
-                    return {"source": "crunchtime", "service": "vendorlocation", "count": len(items), "data": items}
+                    return {
+                        "source": "crunchtime",
+                        "service": "vendorlocation",
+                        "count": len(items),
+                        "data": items,
+                    }
             except Exception:
                 pass
-            raise HTTPException(status_code=404, detail="getAllVendorLocation endpoint not found. Please confirm Crunchtime API path.")
-        raise HTTPException(status_code=e.response.status_code, detail=str(e.response.text))
+            raise HTTPException(
+                status_code=404,
+                detail="getAllVendorLocation endpoint not found. Please confirm Crunchtime API path.",
+            )
+        raise HTTPException(
+            status_code=e.response.status_code, detail=str(e.response.text)
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/vendor-locations/debug")
 async def get_vendor_locations_debug(
-    locationCode: Optional[str] = Query(None, description="Single location code to test"),
+    locationCode: Optional[str] = Query(
+        None, description="Single location code to test"
+    ),
 ):
     """
     Troubleshooting: call Crunchtime getAllVendorLocation and return raw response + summary.
@@ -155,9 +195,13 @@ async def get_vendor_locations_debug(
             has_detail = False
             detail_count = 0
             if items:
-                detail = items[0].get("vendorLocationScheduleDetail") or items[0].get("VendorLocationScheduleDetail")
+                detail = items[0].get("vendorLocationScheduleDetail") or items[0].get(
+                    "VendorLocationScheduleDetail"
+                )
                 has_detail = detail is not None
-                detail_count = len(detail) if isinstance(detail, list) else (1 if detail else 0)
+                detail_count = (
+                    len(detail) if isinstance(detail, list) else (1 if detail else 0)
+                )
             return {
                 "crunchtime_status": resp.status_code,
                 "params_sent": params,

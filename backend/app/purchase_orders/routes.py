@@ -5,7 +5,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 from fastapi import APIRouter, HTTPException, Query
 
-from app.core.config import BASE_URL, PG_DATABASE, PG_HOST, PG_NAME, PG_PASSWORD, PG_PORT
+from app.core.config import (
+    PG_DATABASE,
+    PG_HOST,
+    PG_NAME,
+    PG_PASSWORD,
+    PG_PORT,
+)
 from app.core.crunchtime_api import ct_headers, get_async_client, service_token
 from app.purchase_orders.schemas import (
     PurchaseOrderSubmitRequest,
@@ -21,6 +27,7 @@ def _get_pg_connection():
         return None
     try:
         import psycopg2
+
         return psycopg2.connect(
             host=PG_HOST,
             port=PG_PORT,
@@ -30,6 +37,7 @@ def _get_pg_connection():
         )
     except Exception:
         return None
+
 
 SAVE_PURCHASE_ORDERS_PATH = "/purchaseorder/v1/savePurchaseOrders"
 # Trigger time within this many minutes of now (Sydney) is treated as "submit now" (user has time to review)
@@ -49,7 +57,12 @@ def _parse_order_datetime_sydney(value: str) -> datetime | None:
     value = (value or "").strip()
     if not value:
         return None
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+    ):
         try:
             dt = datetime.strptime(value, fmt)
             return dt.replace(tzinfo=SYDNEY_TZ)
@@ -104,6 +117,7 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
             detail="Order date and time must be current or future (Sydney time AEST/AEDT).",
         )
     from datetime import timedelta
+
     max_schedule = now_sydney + timedelta(days=MAX_SCHEDULE_DAYS)
     if order_dt > max_schedule:
         raise HTTPException(
@@ -120,7 +134,9 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
 
     expected_delivery = (body.expected_delivery_date or "").strip()
     if not expected_delivery:
-        raise HTTPException(status_code=400, detail="Expected delivery date is required.")
+        raise HTTPException(
+            status_code=400, detail="Expected delivery date is required."
+        )
     try:
         delivery_date = datetime.strptime(expected_delivery, "%Y-%m-%d").date()
     except ValueError:
@@ -150,15 +166,27 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
         for i, ed in enumerate(expected_delivery_dates_list):
             ed = (ed or "").strip()
             if not ed:
-                raise HTTPException(status_code=400, detail=f"Expected delivery date required for location index {i}.")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Expected delivery date required for location index {i}.",
+                )
             try:
                 d = datetime.strptime(ed, "%Y-%m-%d").date()
                 if d < order_date_sydney:
-                    raise HTTPException(status_code=400, detail=f"Expected delivery date for location index {i} cannot be before the order date & time.")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Expected delivery date for location index {i} cannot be before the order date & time.",
+                    )
                 if d < today_sydney:
-                    raise HTTPException(status_code=400, detail=f"Expected delivery date for location index {i} must be today or future.")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Expected delivery date for location index {i} must be today or future.",
+                    )
             except ValueError:
-                raise HTTPException(status_code=400, detail=f"Expected delivery date for location index {i} must be YYYY-MM-DD.")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Expected delivery date for location index {i} must be YYYY-MM-DD.",
+                )
 
     # Per-location line items (optional)
     location_line_items_list = body.location_line_items
@@ -171,7 +199,10 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
         for i, loc_lines in enumerate(location_line_items_list):
             valid = [li for li in loc_lines if li.qty > 0]
             if not valid:
-                raise HTTPException(status_code=400, detail=f"At least one line item with qty > 0 required for location index {i}.")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"At least one line item with qty > 0 required for location index {i}.",
+                )
 
     # Validate that at least one line has qty > 0 when not using location_line_items
     valid_lines_default = [li for li in body.line_items if li.qty > 0]
@@ -191,29 +222,37 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
         else:
             valid_lines = valid_lines_default
         if expected_delivery_dates_list is not None:
-            loc_expected = (expected_delivery_dates_list[i] or "").strip() or expected_delivery
+            loc_expected = (
+                expected_delivery_dates_list[i] or ""
+            ).strip() or expected_delivery
         else:
             loc_expected = expected_delivery
         ct_expected_date = _expected_delivery_date_to_ct_format(loc_expected)
         detail_rows = [
-            {"orderQuantity": li.qty, "vendorProductNumber": li.vendor_product_number, "vendorUnit": li.vendor_unit or ""}
+            {
+                "orderQuantity": li.qty,
+                "vendorProductNumber": li.vendor_product_number,
+                "vendorUnit": li.vendor_unit or "",
+            }
             for li in valid_lines
         ]
-        payloads.append({
-            "purchaseOrderSaveRows": [
-                {
-                    "purchaseOrderHeaderRow": {
-                        "orderStatus": "SUBMITTED",
-                        "orderType": "VO",
-                        "expectedDeliveryDate": ct_expected_date,
-                        "locationCode": loc_code,
-                        "vendorCode": body.vendor_code,
-                    },
-                    "purchaseOrderDetailRows": detail_rows,
-                }
-            ],
-            "locationCode": loc_code,
-        })
+        payloads.append(
+            {
+                "purchaseOrderSaveRows": [
+                    {
+                        "purchaseOrderHeaderRow": {
+                            "orderStatus": "SUBMITTED",
+                            "orderType": "VO",
+                            "expectedDeliveryDate": ct_expected_date,
+                            "locationCode": loc_code,
+                            "vendorCode": body.vendor_code,
+                        },
+                        "purchaseOrderDetailRows": detail_rows,
+                    }
+                ],
+                "locationCode": loc_code,
+            }
+        )
         per_location_valid_lines.append(valid_lines)
         per_location_expected_dates.append(loc_expected)
 
@@ -229,7 +268,9 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
         try:
             async with get_async_client() as client:
                 tasks = [
-                    client.post(SAVE_PURCHASE_ORDERS_PATH, json=payload, headers=headers)
+                    client.post(
+                        SAVE_PURCHASE_ORDERS_PATH, json=payload, headers=headers
+                    )
                     for payload in payloads
                 ]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -238,24 +279,34 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                 status_code=502,
                 detail=f"Crunchtime request failed: {e!s}",
             )
+
         for i, r in enumerate(results):
             loc_code = body.location_codes[i]
-            if isinstance(r, Exception):
+
+            # Narrow type for Pyright: gather(return_exceptions=True) can return BaseException
+            if isinstance(r, BaseException):
                 raise HTTPException(
                     status_code=502,
                     detail=f"Crunchtime request failed for location {loc_code}: {r!s}",
                 )
+
+            # From here, r is an httpx.Response
             if r.status_code != 200:
-                detail = f"Crunchtime savePurchaseOrders failed for location {loc_code}."
-                try:
-                    if r.text:
-                        detail = f"{detail} {r.text[:500]}"
-                except Exception:
-                    pass
+                detail = (
+                    f"Crunchtime savePurchaseOrders failed for location {loc_code}."
+                )
+                if r.text:
+                    detail = f"{detail} {r.text[:500]}"
                 raise HTTPException(status_code=502, detail=detail)
+
             try:
                 data = r.json()
-                if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict) and "orderNumber" in data[0]:
+                if (
+                    isinstance(data, list)
+                    and len(data) > 0
+                    and isinstance(data[0], dict)
+                    and "orderNumber" in data[0]
+                ):
                     order_numbers.append(str(data[0]["orderNumber"]))
                 elif isinstance(data, dict) and "orderNumber" in data:
                     order_numbers.append(str(data["orderNumber"]))
@@ -272,13 +323,16 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
         set_order_utc = now_utc
     else:
         order_dt_sydney = _parse_order_datetime_sydney(body.order_date_time)
-        set_order_utc = order_dt_sydney.astimezone(timezone.utc) if order_dt_sydney else now_utc
+        set_order_utc = (
+            order_dt_sydney.astimezone(timezone.utc) if order_dt_sydney else now_utc
+        )
 
     # Persist to CTH (one header per location; reuse order_number by index or single for all)
     location_details_list = body.location_details or []
     if PG_NAME and PG_PASSWORD:
         try:
             import psycopg2
+
             conn = psycopg2.connect(
                 host=PG_HOST,
                 port=PG_PORT,
@@ -292,16 +346,30 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
             submission_attempts_val = 1 if submit_immediately else 0
             last_attempt_at_val = now_utc if submit_immediately else None
             for i, loc_code in enumerate(body.location_codes):
-                trans_no = order_numbers[i] if i < len(order_numbers) else (order_numbers[0] if order_numbers else None)
-                loc_detail = location_details_list[i] if i < len(location_details_list) else None
+                trans_no = (
+                    order_numbers[i]
+                    if i < len(order_numbers)
+                    else (order_numbers[0] if order_numbers else None)
+                )
+                loc_detail = (
+                    location_details_list[i] if i < len(location_details_list) else None
+                )
                 country = loc_detail.country if loc_detail else None
                 state = loc_detail.state if loc_detail else None
                 location_name = loc_detail.location_name if loc_detail else None
                 market = loc_detail.market if loc_detail else None
                 vendor_name = body.vendor_name
-                loc_expected_date = per_location_expected_dates[i] if i < len(per_location_expected_dates) else body.expected_delivery_date
+                loc_expected_date = (
+                    per_location_expected_dates[i]
+                    if i < len(per_location_expected_dates)
+                    else body.expected_delivery_date
+                )
                 expected_dow = _day_of_week_abbrev(loc_expected_date)
-                valid_lines_loc = per_location_valid_lines[i] if i < len(per_location_valid_lines) else valid_lines_default
+                valid_lines_loc = (
+                    per_location_valid_lines[i]
+                    if i < len(per_location_valid_lines)
+                    else valid_lines_default
+                )
                 cur.execute(
                     """
                     INSERT INTO "CTH"."autoAllocationTransHdr" (
@@ -314,11 +382,25 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                     RETURNING "autoAllocateTransID"
                     """,
                     (
-                        country, state, loc_code, location_name, market,
-                        body.vendor_code, vendor_name, None,
-                        now_utc, set_order_utc, loc_expected_date,
-                        expected_dow, submitted_dt, trans_no,
-                        status_val, submission_attempts_val, last_attempt_at_val, None, None,
+                        country,
+                        state,
+                        loc_code,
+                        location_name,
+                        market,
+                        body.vendor_code,
+                        vendor_name,
+                        None,
+                        now_utc,
+                        set_order_utc,
+                        loc_expected_date,
+                        expected_dow,
+                        submitted_dt,
+                        trans_no,
+                        status_val,
+                        submission_attempts_val,
+                        last_attempt_at_val,
+                        None,
+                        None,
                     ),
                 )
                 row = cur.fetchone()
@@ -332,18 +414,27 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                                 "vendorUnit", "orderQuantity", "vendorProductNumber"
                             ) VALUES (%s, %s, %s, %s, %s, %s)
                             """,
-                            (hdr_id, None if not li.product_number else li.product_number, li.product_name, li.vendor_unit or "", li.qty, li.vendor_product_number or ""),
+                            (
+                                hdr_id,
+                                None if not li.product_number else li.product_number,
+                                li.product_name,
+                                li.vendor_unit or "",
+                                li.qty,
+                                li.vendor_product_number or "",
+                            ),
                         )
             conn.commit()
             cur.close()
             conn.close()
-        except Exception as db_err:
+        except Exception:
             # Log but do not fail the request; Crunchtime already succeeded
             pass
 
     total_lines = sum(len(v) for v in per_location_valid_lines)
     if submit_immediately:
-        message = "Order submitted successfully." + (f" Order number(s): {', '.join(order_numbers)}" if order_numbers else "")
+        message = "Order submitted successfully." + (
+            f" Order number(s): {', '.join(order_numbers)}" if order_numbers else ""
+        )
     else:
         message = f"Order scheduled for {body.order_date_time} (Sydney). It will be sent to the vendor at that time."
     return PurchaseOrderSubmitResponse(
@@ -392,14 +483,21 @@ def get_transactions_filter_options():
         locations = [r[0] for r in cur.fetchall()]
         cur.close()
         conn.close()
-        return {"states": states, "markets": markets, "vendors": vendors, "locations": locations}
+        return {
+            "states": states,
+            "markets": markets,
+            "vendors": vendors,
+            "locations": locations,
+        }
     except Exception as e:
         if conn:
             try:
                 conn.close()
             except Exception:
                 pass
-        raise HTTPException(status_code=500, detail=f"Failed to load filter options: {e!s}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load filter options: {e!s}"
+        )
 
 
 @router.get("/transactions/{transaction_id:int}/details")
@@ -422,9 +520,19 @@ def get_transaction_details(transaction_id: int):
             (transaction_id,),
         )
         rows = cur.fetchall()
-        colnames = [d[0] for d in cur.description]
+
+        description = cur.description
+        if description is None:
+            raise HTTPException(
+                status_code=500,
+                detail="No column metadata returned",
+            )
+
+        colnames = [d[0] for d in description]
+
         cur.close()
         conn.close()
+
         data = [dict(zip(colnames, row)) for row in rows]
         return {"data": data}
     except Exception as e:
@@ -433,7 +541,9 @@ def get_transaction_details(transaction_id: int):
                 conn.close()
             except Exception:
                 pass
-        raise HTTPException(status_code=500, detail=f"Failed to load transaction details: {e!s}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load transaction details: {e!s}"
+        )
 
 
 @router.get("/transactions")
@@ -442,12 +552,25 @@ def get_transactions(
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     state: str | None = Query(None, description="Filter by state"),
     market: str | None = Query(None, description="Filter by market"),
-    vendor_name: str | None = Query(None, alias="vendor", description="Filter by vendor name"),
-    location_code: str | None = Query(None, alias="location", description="Filter by location code"),
-    from_date: str | None = Query(None, description="Filter expected delivery from (YYYY-MM-DD)"),
-    to_date: str | None = Query(None, description="Filter expected delivery to (YYYY-MM-DD)"),
-    po_number: str | None = Query(None, alias="po", description="Filter by PO number (partial match)"),
-    not_submitted: bool = Query(False, description="If true, only return orders not yet submitted (status != 'SUBMITTED')"),
+    vendor_name: str | None = Query(
+        None, alias="vendor", description="Filter by vendor name"
+    ),
+    location_code: str | None = Query(
+        None, alias="location", description="Filter by location code"
+    ),
+    from_date: str | None = Query(
+        None, description="Filter expected delivery from (YYYY-MM-DD)"
+    ),
+    to_date: str | None = Query(
+        None, description="Filter expected delivery to (YYYY-MM-DD)"
+    ),
+    po_number: str | None = Query(
+        None, alias="po", description="Filter by PO number (partial match)"
+    ),
+    not_submitted: bool = Query(
+        False,
+        description="If true, only return orders not yet submitted (status != 'SUBMITTED')",
+    ),
 ):
     """
     List Auto Allocation transactions from PostgreSQL (CTH.autoAllocationTransHdr).
@@ -488,30 +611,43 @@ def get_transactions(
             sql += " AND market = %s"
         if vendor_name and vendor_name.strip():
             params.append(vendor_name.strip())
-            sql += " AND \"vendorName\" = %s"
+            sql += ' AND "vendorName" = %s'
         if location_code and location_code.strip():
             params.append(location_code.strip())
-            sql += " AND \"locationCode\" = %s"
+            sql += ' AND "locationCode" = %s'
         if from_date and from_date.strip():
             params.append(from_date.strip())
-            sql += " AND \"setExpectedDeliveryDate\" >= %s"
+            sql += ' AND "setExpectedDeliveryDate" >= %s'
         if to_date and to_date.strip():
             params.append(to_date.strip())
-            sql += " AND \"setExpectedDeliveryDate\" <= %s"
+            sql += ' AND "setExpectedDeliveryDate" <= %s'
         if po_number and po_number.strip():
             params.append(f"%{po_number.strip()}%")
-            sql += " AND \"transactionNo\" ILIKE %s"
+            sql += ' AND "transactionNo" ILIKE %s'
         if not_submitted:
             sql += " AND status != 'SUBMITTED'"
-        sql += " ORDER BY (CASE WHEN status = 'SUBMITTED' THEN 1 ELSE 0 END), \"transactionNo\" DESC NULLS LAST, \"setOrderDateTme\" DESC NULLS LAST LIMIT %s OFFSET %s"
+        sql += ' ORDER BY (CASE WHEN status = \'SUBMITTED\' THEN 1 ELSE 0 END), "transactionNo" DESC NULLS LAST, "setOrderDateTme" DESC NULLS LAST LIMIT %s OFFSET %s'
         params.extend([limit, offset])
         cur.execute(sql, params)
         rows = cur.fetchall()
-        colnames = [d[0] for d in cur.description]
+
+        description = cur.description
+        if description is None:
+            raise HTTPException(
+                status_code=500,
+                detail="No column metadata returned",
+            )
+
+        colnames = [d[0] for d in description]
         data = []
         for row in rows:
             rec = dict(zip(colnames, row))
-            for key in ("setExpectedDeliveryDate", "setOrderDateTme", "submittedDateTime", "alert_sent_at"):
+            for key in (
+                "setExpectedDeliveryDate",
+                "setOrderDateTme",
+                "submittedDateTime",
+                "alert_sent_at",
+            ):
                 if key in rec and rec[key] is not None:
                     v = rec[key]
                     if hasattr(v, "isoformat"):
@@ -528,4 +664,6 @@ def get_transactions(
                 conn.close()
             except Exception:
                 pass
-        raise HTTPException(status_code=500, detail=f"Failed to load transactions: {e!s}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load transactions: {e!s}"
+        )

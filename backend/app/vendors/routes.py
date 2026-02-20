@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 import httpx
 import json
 import os
@@ -8,36 +8,40 @@ from .schemas import VendorResponse, HierarchyResponse
 router = APIRouter()
 
 # Debug: log path to confirm handler is hit (workspace .cursor/debug.log)
-_DEBUG_LOG = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".cursor", "debug.log"))
+_DEBUG_LOG = os.path.normpath(
+    os.path.join(
+        os.path.dirname(__file__), "..", "..", "..", "..", ".cursor", "debug.log"
+    )
+)
 
 
 @router.get("/", response_model=VendorResponse)
 async def get_all_vendors(activeFlag: bool | None = None):
     """
     Get all vendors from Crunchtime.
-    
+
     Note: Exact endpoint path may need to be confirmed.
     Common patterns: /vendor/v1/getAllVendors or /vendor/v1/getVendors
-    
+
     Args:
         activeFlag: Filter by active status (optional)
-    
+
     Returns:
         List of vendors with metadata
     """
     # Try common endpoint patterns - may need adjustment based on actual API
     url = f"{BASE_URL}/vendor/v1/getAllVendors"
-    
+
     params = {}
     if activeFlag is not None:
         params["activeFlag"] = str(activeFlag).lower()
-    
+
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.get(
                 url,
                 headers=ct_headers(token_override=service_token("vendor")),
-                params=params
+                params=params,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -45,7 +49,7 @@ async def get_all_vendors(activeFlag: bool | None = None):
                 "source": "crunchtime",
                 "service": "vendor",
                 "count": (len(data) if isinstance(data, list) else None),
-                "data": data if isinstance(data, list) else [data]
+                "data": data if isinstance(data, list) else [data],
             }
     except httpx.HTTPStatusError as e:
         # If endpoint doesn't exist, try alternative
@@ -56,7 +60,7 @@ async def get_all_vendors(activeFlag: bool | None = None):
                     resp = await client.get(
                         url_alt,
                         headers=ct_headers(token_override=service_token("vendor")),
-                        params=params
+                        params=params,
                     )
                     resp.raise_for_status()
                     data = resp.json()
@@ -64,10 +68,13 @@ async def get_all_vendors(activeFlag: bool | None = None):
                         "source": "crunchtime",
                         "service": "vendor",
                         "count": (len(data) if isinstance(data, list) else None),
-                        "data": data if isinstance(data, list) else [data]
+                        "data": data if isinstance(data, list) else [data],
                     }
             except Exception:
-                raise HTTPException(status_code=404, detail="Vendor endpoint not found. Please confirm endpoint path.")
+                raise HTTPException(
+                    status_code=404,
+                    detail="Vendor endpoint not found. Please confirm endpoint path.",
+                )
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -80,7 +87,9 @@ async def hierarchy_health():
 
 
 @router.get("/hierarchy/debug")
-async def get_hierarchy_debug(hierarchyType: str | None = None, levelNumber: int | None = 3):
+async def get_hierarchy_debug(
+    hierarchyType: str | None = None, levelNumber: int | None = 3
+):
     """
     Call Crunchtime hierarchy API and return the raw response and status.
     Use this to verify whether Distribution Centers (hierarchy) data is being returned.
@@ -96,7 +105,9 @@ async def get_hierarchy_debug(hierarchyType: str | None = None, levelNumber: int
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(url, headers=headers, params=params if params else None)
+            resp = await client.get(
+                url, headers=headers, params=params if params else None
+            )
             try:
                 raw_body = resp.json()
             except Exception:
@@ -106,7 +117,11 @@ async def get_hierarchy_debug(hierarchyType: str | None = None, levelNumber: int
                 "crunchtime_url": str(resp.url),
                 "params_sent": params,
                 "raw_response": raw_body,
-                "response_type": "dict" if isinstance(raw_body, dict) else "list" if isinstance(raw_body, list) else "str",
+                "response_type": "dict"
+                if isinstance(raw_body, dict)
+                else "list"
+                if isinstance(raw_body, list)
+                else "str",
                 "hint": "If status_code is 200, check raw_response for 'locations' or a list of items with parentLogicalName/locationCode.",
             }
     except httpx.HTTPStatusError as e:
@@ -130,7 +145,12 @@ async def get_hierarchy(hierarchyType: str | None = None, levelNumber: int | Non
     # Debug: confirm this handler is hit (if 404 persists, this log will be missing)
     try:
         with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"message": "get_hierarchy_called", "hierarchyType": hierarchyType}) + "\n")
+            f.write(
+                json.dumps(
+                    {"message": "get_hierarchy_called", "hierarchyType": hierarchyType}
+                )
+                + "\n"
+            )
     except Exception:
         pass
     """
@@ -173,8 +193,17 @@ async def get_hierarchy(hierarchyType: str | None = None, levelNumber: int | Non
                 items = [data] if isinstance(data, dict) else [data]
             # If levelNumber=3 was requested, filter to level-3 rows in case API returns all levels
             if levelNumber == 3 and items:
-                items = [i for i in items if i.get("levelNumber") == 3 or i.get("levelNumber") == "3"]
-            return {"source": "crunchtime", "service": "hierarchy", "count": len(items), "data": items}
+                items = [
+                    i
+                    for i in items
+                    if i.get("levelNumber") == 3 or i.get("levelNumber") == "3"
+                ]
+            return {
+                "source": "crunchtime",
+                "service": "hierarchy",
+                "count": len(items),
+                "data": items,
+            }
 
     try:
         return await _get(params)
@@ -182,7 +211,9 @@ async def get_hierarchy(hierarchyType: str | None = None, levelNumber: int | Non
         # Crunchtime may 404 for unknown hierarchyType or if levelNumber is not supported; never return 404 to client
         if e.response.status_code == 404 and params.get("levelNumber") is not None:
             try:
-                params_no_level = {k: v for k, v in params.items() if k != "levelNumber"}
+                params_no_level = {
+                    k: v for k, v in params.items() if k != "levelNumber"
+                }
                 return await _get(params_no_level)
             except Exception:
                 return empty_ok

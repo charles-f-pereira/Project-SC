@@ -2,30 +2,44 @@
 APScheduler job: process SCHEDULED purchase orders when setOrderDateTme <= now.
 Uses sync psycopg2 and sync httpx (job runs in a thread).
 """
+
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timedelta, timezone
+
 import httpx
 
-logger = logging.getLogger(__name__)
-
-from app.core.config import BASE_URL, PG_DATABASE, PG_HOST, PG_NAME, PG_PASSWORD, PG_PORT
+from app.core.config import (
+    BASE_URL,
+    PG_DATABASE,
+    PG_HOST,
+    PG_NAME,
+    PG_PASSWORD,
+    PG_PORT,
+)
 from app.core.crunchtime_api import ct_headers, service_token
+
+logger = logging.getLogger(__name__)
 
 SAVE_PURCHASE_ORDERS_PATH = "/purchaseorder/v1/savePurchaseOrders"
 MAX_ATTEMPTS = 5
 RETRY_INTERVAL_MINUTES = 5
 
 
-def _expected_delivery_date_to_ct_format(ymd: str | None) -> str:
-    """Convert YYYY-MM-DD (str or date) to mm/dd/yyyy for Crunchtime."""
-    if hasattr(ymd, "strftime"):
-        ymd = ymd.strftime("%Y-%m-%d") if ymd else ""
-    parts = (ymd or "").strip().split("-")
+def _expected_delivery_date_to_ct_format(ymd: str | date | datetime | None) -> str:
+    """Convert YYYY-MM-DD (or date/datetime) to mm/dd/yyyy for Crunchtime."""
+    if ymd is None:
+        return ""
+
+    if isinstance(ymd, (date, datetime)):
+        ymd = ymd.strftime("%Y-%m-%d")
+
+    parts = ymd.strip().split("-")
     if len(parts) != 3:
-        return str(ymd) if ymd else ""
-    y, m, d = parts[0], parts[1], parts[2]
+        return ymd
+
+    y, m, d = parts
     return f"{m}/{d}/{y}"
 
 
@@ -34,6 +48,7 @@ def _get_connection():
         return None
     try:
         import psycopg2
+
         return psycopg2.connect(
             host=PG_HOST,
             port=PG_PORT,
@@ -54,12 +69,15 @@ def run_scheduled_po_job():
     """
     conn = _get_connection()
     if not conn:
-        logger.warning("scheduled_po_job: no DB connection (pgName/pgPassword not set?)")
+        logger.warning(
+            "scheduled_po_job: no DB connection (pgName/pgPassword not set?)"
+        )
         return
+
     now_utc = datetime.now(timezone.utc)
     retry_cutoff = now_utc - timedelta(minutes=RETRY_INTERVAL_MINUTES)
+
     try:
-        import psycopg2
         cur = conn.cursor()
         cur.execute(
             """
@@ -75,10 +93,13 @@ def run_scheduled_po_job():
         )
         rows = cur.fetchall()
         if rows:
-            logger.info("scheduled_po_job: found %s SCHEDULED order(s) due at %s UTC", len(rows), now_utc.isoformat())
-        for row in rows:
-            hdr_id, location_code, vendor_code, expected_delivery = row
-            # Load detail rows (vendorProductNumber, orderQuantity, vendorUnit)
+            logger.info(
+                "scheduled_po_job: found %s SCHEDULED order(s) due at %s UTC",
+                len(rows),
+                now_utc.isoformat(),
+            )
+
+        for hdr_id, location_code, vendor_code, expected_delivery in rows:
             cur.execute(
                 """
                 SELECT "vendorProductNumber", "orderQuantity", "vendorUnit"
@@ -97,8 +118,8 @@ def run_scheduled_po_job():
                 }
                 for vpn, qty, vu in detail_rows
             ]
+
             if not detail_payload:
-                # No lines: mark as failed
                 cur.execute(
                     """
                     UPDATE "CTH"."autoAllocationTransHdr"
@@ -112,7 +133,9 @@ def run_scheduled_po_job():
                 )
                 conn.commit()
                 continue
-            ct_expected = _expected_delivery_date_to_ct_format(expected_delivery or "")
+
+            ct_expected = _expected_delivery_date_to_ct_format(expected_delivery)
+
             payload = {
                 "purchaseOrderSaveRows": [
                     {
@@ -128,6 +151,7 @@ def run_scheduled_po_job():
                 ],
                 "locationCode": location_code,
             }
+
             # Mark attempt before calling CT so we don't double-pick
             cur.execute(
                 """
@@ -146,12 +170,19 @@ def run_scheduled_po_job():
                 "accept": "application/json",
                 "content-type": "application/json",
             }
+
             try:
                 with httpx.Client(base_url=BASE_URL, timeout=30.0) as client:
-                    r = client.post(SAVE_PURCHASE_ORDERS_PATH, json=payload, headers=headers)
-            except Exception as e:
+                    r = client.post(
+                        SAVE_PURCHASE_ORDERS_PATH, json=payload, headers=headers
+                    )
+            except httpx.RequestError as e:
                 err_msg = str(e)
-                logger.exception("scheduled_po_job: Crunchtime request failed for autoAllocateTransID=%s: %s", hdr_id, err_msg)
+                logger.exception(
+                    "scheduled_po_job: Crunchtime request failed for autoAllocateTransID=%s: %s",
+                    hdr_id,
+                    err_msg,
+                )
                 cur.execute(
                     """
                     UPDATE "CTH"."autoAllocationTransHdr"
@@ -175,12 +206,18 @@ def run_scheduled_po_job():
                 try:
                     data = r.json()
                     order_no = None
-                    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict) and "orderNumber" in data[0]:
+                    if (
+                        isinstance(data, list)
+                        and data
+                        and isinstance(data[0], dict)
+                        and "orderNumber" in data[0]
+                    ):
                         order_no = str(data[0]["orderNumber"])
                     elif isinstance(data, dict) and "orderNumber" in data:
                         order_no = str(data["orderNumber"])
                 except Exception:
                     order_no = None
+
                 cur.execute(
                     """
                     UPDATE "CTH"."autoAllocationTransHdr"
@@ -190,13 +227,19 @@ def run_scheduled_po_job():
                     (now_utc, order_no, hdr_id),
                 )
                 conn.commit()
-                logger.info("scheduled_po_job: autoAllocateTransID=%s submitted, transactionNo=%s", hdr_id, order_no)
+                logger.info(
+                    "scheduled_po_job: autoAllocateTransID=%s submitted, transactionNo=%s",
+                    hdr_id,
+                    order_no,
+                )
             else:
-                try:
-                    err_msg = (r.text or "")[:2000]
-                except Exception:
-                    err_msg = f"HTTP {r.status_code}"
-                logger.warning("scheduled_po_job: Crunchtime returned %s for autoAllocateTransID=%s: %s", r.status_code, hdr_id, err_msg[:200])
+                err_msg = (r.text or "")[:2000]
+                logger.warning(
+                    "scheduled_po_job: Crunchtime returned %s for autoAllocateTransID=%s: %s",
+                    r.status_code,
+                    hdr_id,
+                    err_msg[:200],
+                )
                 cur.execute(
                     """
                     UPDATE "CTH"."autoAllocationTransHdr"
@@ -214,17 +257,17 @@ def run_scheduled_po_job():
                     (hdr_id, MAX_ATTEMPTS),
                 )
                 conn.commit()
+
         cur.close()
+
     except Exception as e:
         logger.exception("scheduled_po_job: error %s", e)
-        if conn:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     finally:
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+        try:
+            conn.close()
+        except Exception:
+            pass

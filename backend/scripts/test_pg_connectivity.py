@@ -3,22 +3,26 @@ Test PostgreSQL connectivity and verify CTH schema / autoAllocationTransHdr / au
 Run from backend directory: python scripts/test_pg_connectivity.py
 Or from project root: python backend/scripts/test_pg_connectivity.py
 """
+
 import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Load .env from backend directory (and cwd as fallback)
 _backend_dir = Path(__file__).resolve().parent.parent
-from dotenv import load_dotenv
 _env_file = _backend_dir / ".env"
+
 if _env_file.exists():
     load_dotenv(_env_file)
+
 load_dotenv()  # cwd .env as fallback
+
 sys.path.insert(0, str(_backend_dir))
 
 try:
     import psycopg2
-    from psycopg2 import sql
 except ImportError:
     print("ERROR: psycopg2 not installed. Run: pip install psycopg2-binary")
     sys.exit(1)
@@ -33,7 +37,16 @@ PG_PASSWORD = os.getenv("pgPassword") or os.getenv("PG_PASSWORD")
 def main():
     print("PostgreSQL connectivity and structure test")
     print("Env loaded from:", _env_file if _env_file.exists() else "cwd")
-    print("Database:", PG_DATABASE, "Host:", PG_HOST, "Port:", PG_PORT, "User:", PG_NAME or "(not set)")
+    print(
+        "Database:",
+        PG_DATABASE,
+        "Host:",
+        PG_HOST,
+        "Port:",
+        PG_PORT,
+        "User:",
+        PG_NAME or "(not set)",
+    )
     print()
 
     if not PG_NAME or not PG_PASSWORD:
@@ -114,7 +127,9 @@ def main():
     if cur.fetchone():
         print("FK autoAllocationTransDtl -> autoAllocationTransHdr: OK")
     else:
-        print("FK autoAllocationTransDtl -> autoAllocationTransHdr: not found (optional check)")
+        print(
+            "FK autoAllocationTransDtl -> autoAllocationTransHdr: not found (optional check)"
+        )
 
     conn.close()
     print()

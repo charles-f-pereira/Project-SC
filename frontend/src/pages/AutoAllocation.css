@@ -63,7 +63,7 @@
 
 .expected-delivery-date-input:focus {
   outline: none;
-  border-color: var(--ct-primary, #FFD700);
+  border-color: var(--ct-primary, #ffd700);
   box-shadow: 0 0 0 2px rgba(255, 215, 0, 0.25);
 }
 
@@ -84,7 +84,7 @@
 
 .order-datetime-input:focus {
   outline: none;
-  border-color: var(--ct-primary, #FFD700);
+  border-color: var(--ct-primary, #ffd700);
   box-shadow: 0 0 0 2px rgba(255, 215, 0, 0.25);
 }
 
@@ -138,7 +138,7 @@
   padding: 0.4rem 1rem;
   font-size: 0.95rem;
   font-weight: 600;
-  background: var(--ct-primary, #FFD700);
+  background: var(--ct-primary, #ffd700);
   color: var(--ct-secondary, #000);
   border: 1px solid var(--ct-secondary, #000);
   border-radius: 6px;
@@ -205,7 +205,7 @@
 
 .review-date-input:focus {
   outline: none;
-  border-color: var(--ct-primary, #FFD700);
+  border-color: var(--ct-primary, #ffd700);
 }
 
 .review-qty-input {
@@ -233,7 +233,7 @@
 }
 
 .submit-section {
-  border-color: var(--ct-primary, #FFD700);
+  border-color: var(--ct-primary, #ffd700);
   border-width: 2px;
 }
 
@@ -265,7 +265,7 @@
   padding: 0.75rem 1.5rem;
   font-size: 1rem;
   font-weight: 600;
-  background: var(--ct-primary, #FFD700);
+  background: var(--ct-primary, #ffd700);
   color: var(--ct-secondary, #000);
   border: 1px solid var(--ct-secondary, #000);
   border-radius: 6px;
@@ -316,14 +316,14 @@
 
 .product-search-input:focus {
   outline: none;
-  border-color: var(--ct-primary, #FFD700);
+  border-color: var(--ct-primary, #ffd700);
 }
 
 .product-search-btn {
   padding: 0.5rem 1rem;
   font-size: 0.95rem;
   font-weight: 600;
-  background: var(--ct-primary, #FFD700);
+  background: var(--ct-primary, #ffd700);
   color: var(--ct-secondary, #000);
   border: 1px solid var(--ct-secondary, #000);
   border-radius: 6px;
@@ -417,7 +417,7 @@
 .add-product-btn {
   padding: 0.35rem 0.6rem;
   font-size: 0.85rem;
-  background: var(--ct-primary, #FFD700);
+  background: var(--ct-primary, #ffd700);
   color: var(--ct-secondary, #000);
   border: 1px solid var(--ct-secondary, #000);
   border-radius: 4px;
@@ -500,7 +500,7 @@
 }
 
 .order-lines-table th {
-  background: var(--ct-primary, #FFD700);
+  background: var(--ct-primary, #ffd700);
   color: var(--ct-secondary, #000);
   font-weight: 600;
   text-align: left;
@@ -535,7 +535,7 @@
 
 .qty-input:focus {
   outline: none;
-  border-color: var(--ct-primary, #FFD700);
+  border-color: var(--ct-primary, #ffd700);
 }
 
 .remove-line-btn {

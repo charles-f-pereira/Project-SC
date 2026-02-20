@@ -181,7 +181,7 @@
 }
 
 .review-filter-btn.apply {
-  background: var(--ct-primary, #FFD700);
+  background: var(--ct-primary, #ffd700);
   color: var(--ct-secondary, #000);
   border-color: var(--ct-secondary, #000);
 }

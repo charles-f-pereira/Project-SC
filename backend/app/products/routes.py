@@ -5,10 +5,14 @@ from .schemas import CompanyProductsResponse, VendorProductPricingResponse
 router = APIRouter()
 
 # Crunchtime getAllCompanyProductsEnhanced (companyproduct/v1) – kept for later phases
-GET_ALL_COMPANY_PRODUCTS_ENHANCED_PATH = "/companyproduct/v1/getAllCompanyProductsEnhanced"
+GET_ALL_COMPANY_PRODUCTS_ENHANCED_PATH = (
+    "/companyproduct/v1/getAllCompanyProductsEnhanced"
+)
 
 # Crunchtime getAllVendorProductPricing (vendorproductpricing/v1) – Phase 1 product catalogue
-GET_ALL_VENDOR_PRODUCT_PRICING_PATH = "/vendorproductpricing/v1/getAllVendorProductPricing"
+GET_ALL_VENDOR_PRODUCT_PRICING_PATH = (
+    "/vendorproductpricing/v1/getAllVendorProductPricing"
+)
 
 
 def _normalize_company_products_response(data) -> list:
@@ -16,7 +20,13 @@ def _normalize_company_products_response(data) -> list:
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        for key in ("data", "companyProducts", "CompanyProducts", "products", "Products"):
+        for key in (
+            "data",
+            "companyProducts",
+            "CompanyProducts",
+            "products",
+            "Products",
+        ):
             val = data.get(key)
             if isinstance(val, list):
                 return val
@@ -26,10 +36,16 @@ def _normalize_company_products_response(data) -> list:
 
 @router.get("/company-products-enhanced", response_model=CompanyProductsResponse)
 async def get_company_products_enhanced(
-    product_number: str | None = Query(None, description="Filter by product number (e.g. P-10003)"),
-    product_name: str | None = Query(None, description="Filter by product name (e.g. Meat - Chicken Maryland)"),
+    product_number: str | None = Query(
+        None, description="Filter by product number (e.g. P-10003)"
+    ),
+    product_name: str | None = Query(
+        None, description="Filter by product name (e.g. Meat - Chicken Maryland)"
+    ),
     active_flag: bool = Query(True, description="Only active items"),
-    include_details: bool = Query(False, description="Keep payload tidy; set false to exclude detail bloat"),
+    include_details: bool = Query(
+        False, description="Keep payload tidy; set false to exclude detail bloat"
+    ),
     include_null: bool = Query(False, description="Exclude NULL values"),
 ):
     """
@@ -82,7 +98,13 @@ def _normalize_vendor_pricing_response(data) -> list:
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        for key in ("data", "vendorProductPricing", "VendorProductPricing", "products", "Products"):
+        for key in (
+            "data",
+            "vendorProductPricing",
+            "VendorProductPricing",
+            "products",
+            "Products",
+        ):
             val = data.get(key)
             if isinstance(val, list):
                 return val
@@ -92,7 +114,9 @@ def _normalize_vendor_pricing_response(data) -> list:
 
 @router.get("/vendor-product-pricing", response_model=VendorProductPricingResponse)
 async def get_vendor_product_pricing(
-    effective_date: str = Query(..., description="Effective date for pricing (mm/dd/yyyy)"),
+    effective_date: str = Query(
+        ..., description="Effective date for pricing (mm/dd/yyyy)"
+    ),
     market: str = Query(..., description="Market code (e.g. NSW)"),
     vendor: str = Query(..., description="Vendor name or code (e.g. Baiada)"),
     product_number: str | None = Query(None, description="Filter by product number"),

@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect } from 'react'
-import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
-import Dashboard from './pages/Dashboard.jsx'
-import AutoAllocation from './pages/AutoAllocation.jsx'
-import ReviewAutoAllocatedOrders from './pages/ReviewAutoAllocatedOrders.jsx'
-import './App.css'
+import { useState, useRef, useEffect } from 'react';
+import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import Dashboard from './pages/Dashboard.jsx';
+import AutoAllocation from './pages/AutoAllocation.jsx';
+import ReviewAutoAllocatedOrders from './pages/ReviewAutoAllocatedOrders.jsx';
+import './App.css';
 
 const COLORS = {
   primary: '#FFD700',
@@ -11,43 +11,49 @@ const COLORS = {
   background: '#1a1a1a',
   text: '#ffffff',
   border: '#333',
-}
+};
 
 function App() {
-  const [menuOpen, setMenuOpen] = useState(false)
-  const menuContainerRef = useRef(null)
-  const menuButtonRef = useRef(null)
-  const navigate = useNavigate()
-  const location = useLocation()
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuContainerRef = useRef(null);
+  const menuButtonRef = useRef(null);
+  const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     const handleDocClick = (e) => {
-      if (!menuOpen) return
-      if (menuContainerRef.current && !menuContainerRef.current.contains(e.target) &&
-          menuButtonRef.current && !menuButtonRef.current.contains(e.target)) {
-        setMenuOpen(false)
+      if (!menuOpen) return;
+      if (
+        menuContainerRef.current &&
+        !menuContainerRef.current.contains(e.target) &&
+        menuButtonRef.current &&
+        !menuButtonRef.current.contains(e.target)
+      ) {
+        setMenuOpen(false);
       }
-    }
+    };
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape') setMenuOpen(false)
-    }
-    document.addEventListener('mousedown', handleDocClick)
-    document.addEventListener('keydown', handleKeyDown)
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleDocClick);
+    document.addEventListener('keydown', handleKeyDown);
     return () => {
-      document.removeEventListener('mousedown', handleDocClick)
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [menuOpen])
+      document.removeEventListener('mousedown', handleDocClick);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [menuOpen]);
 
   const navTo = (path) => {
-    navigate(path)
-    setMenuOpen(false)
-  }
+    navigate(path);
+    setMenuOpen(false);
+  };
 
   const pageTitle =
-    location.pathname === '/auto-allocation' ? 'Auto Allocation' :
-    location.pathname === '/review-auto-allocated-orders' ? 'Review Auto Allocated Orders' :
-    'Delivery Schedules'
+    location.pathname === '/auto-allocation'
+      ? 'Auto Allocation'
+      : location.pathname === '/review-auto-allocated-orders'
+        ? 'Review Auto Allocated Orders'
+        : 'Delivery Schedules';
 
   return (
     <div className="app app-ct-style">
@@ -121,7 +127,7 @@ function App() {
         </Routes>
       </main>
     </div>
-  )
+  );
 }
 
-export default App
+export default App;

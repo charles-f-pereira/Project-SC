@@ -1,6 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import os
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -14,8 +13,7 @@ from app.products.routes import router as products_router
 from app.scheduler import run_scheduled_po_job
 
 app = FastAPI(
-    title="Project SC API",
-    description="Ordering & Delivery Schedule Administration"
+    title="Project SC API", description="Ordering & Delivery Schedule Administration"
 )
 
 _scheduler = BackgroundScheduler()
@@ -37,10 +35,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.on_event("startup")
 async def _startup_banner():
     print(f"[startup] Project SC API starting (env: {CT_ENV}, base: {BASE_URL})")
-    print("[startup] Routers: locations, vendors, schedules, holidays, purchase_orders, products")
+    print(
+        "[startup] Routers: locations, vendors, schedules, holidays, purchase_orders, products"
+    )
     _scheduler.start()
     print("[startup] APScheduler started (scheduled PO job every 2 min)")
 
@@ -50,15 +51,19 @@ def _shutdown_scheduler():
     _scheduler.shutdown(wait=False)
     print("[shutdown] APScheduler stopped")
 
+
 # Health check
 @app.get("/api/health")
 def health():
     return {"ok": True, "env": CT_ENV, "service": "Project SC API"}
+
 
 # Mount routers
 app.include_router(locations_router, prefix="/api/locations", tags=["locations"])
 app.include_router(vendors_router, prefix="/api/vendors", tags=["vendors"])
 app.include_router(schedules_router, prefix="/api/schedules", tags=["schedules"])
 app.include_router(holidays_router, prefix="/api/holidays", tags=["holidays"])
-app.include_router(purchase_orders_router, prefix="/api/purchase-orders", tags=["purchase_orders"])
+app.include_router(
+    purchase_orders_router, prefix="/api/purchase-orders", tags=["purchase_orders"]
+)
 app.include_router(products_router, prefix="/api/products", tags=["products"])

@@ -6,7 +6,7 @@
 }
 
 .app-ct-style {
-  --ct-primary: #FFD700;
+  --ct-primary: #ffd700;
   --ct-secondary: #000000;
   --ct-background: #1a1a1a;
   --ct-text: #ffffff;
@@ -15,7 +15,7 @@
 
 .app-header {
   background-color: var(--ct-secondary, #000000);
-  color: var(--ct-primary, #FFD700);
+  color: var(--ct-primary, #ffd700);
   padding: 0.75rem 1.5rem;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   flex-shrink: 0;

@@ -7,6 +7,7 @@ from typing import Any, List
 
 class CompanyProductsResponse(BaseModel):
     """Response from GET company products enhanced (Crunchtime passthrough)."""
+
     source: str = "crunchtime"
     service: str = "getAllCompanyProductsEnhanced"
     data: List[Any] = []
@@ -15,6 +16,7 @@ class CompanyProductsResponse(BaseModel):
 
 class VendorProductPricingResponse(BaseModel):
     """Response from GET vendor product pricing (Crunchtime passthrough)."""
+
     source: str = "crunchtime"
     service: str = "getAllVendorProductPricing"
     data: List[Any] = []

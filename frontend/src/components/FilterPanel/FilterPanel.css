@@ -7,7 +7,7 @@
   width: 300px;
   background: white;
   border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   max-height: calc(100vh - 200px);
   position: sticky;
   top: 2rem;
@@ -35,14 +35,16 @@
   border-left: none;
   border-radius: 0 8px 8px 0;
   cursor: pointer;
-  box-shadow: 2px 0 6px rgba(0,0,0,0.12);
-  transition: background-color 0.2s, color 0.2s;
+  box-shadow: 2px 0 6px rgba(0, 0, 0, 0.12);
+  transition:
+    background-color 0.2s,
+    color 0.2s;
   z-index: 2;
 }
 
 .filter-panel-collapse-tab:hover {
   background: #34495e;
-  color: var(--ct-primary, #FFD700);
+  color: var(--ct-primary, #ffd700);
 }
 
 .filter-panel-collapse-arrow {
@@ -311,7 +313,7 @@
   background-color: #f5f5f5;
 }
 
-.filter-checkbox input[type="checkbox"] {
+.filter-checkbox input[type='checkbox'] {
   cursor: pointer;
 }
 

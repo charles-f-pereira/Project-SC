@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 
 # Use Windows (OS) trust store for TLS – fixes SSL issues on corp networks
 import truststore
+
 truststore.inject_into_ssl()
 
 # Load environment from a local .env if present
@@ -26,7 +27,9 @@ PASSWORD = os.getenv("password")
 HIERARCHY_TOKEN = os.getenv("CRUNCHTIME_HIERARCHY_TOKEN_TEST")
 VENDOR_TOKEN = os.getenv("CRUNCHTIME_VENDOR_TOKEN_TEST")
 VENDOR_LOCATION_TOKEN = os.getenv("CRUNCHTIME_VENDOR_LOCATION_TOKEN_TEST")
-COMPANY_PRODUCT_ENHANCED_TOKEN = os.getenv("CRUNCHTIME_COMPANY_PRODUCT_ENHANCED_TOKEN_TEST")
+COMPANY_PRODUCT_ENHANCED_TOKEN = os.getenv(
+    "CRUNCHTIME_COMPANY_PRODUCT_ENHANCED_TOKEN_TEST"
+)
 VENDOR_PRODUCT_PRICING_TOKEN = os.getenv("CRUNCHTIME_VENDOR_PRODUCT_PRICING_TOKEN_TEST")
 PURCHASE_ORDERS_TOKEN = os.getenv("CRUNCHTIME_PURCHASE_ORDERS_TOKEN_TEST")
 
