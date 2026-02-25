@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
@@ -40,19 +40,29 @@ def _get_pg_connection():
 
 
 SAVE_PURCHASE_ORDERS_PATH = "/purchaseorder/v1/savePurchaseOrders"
-# Trigger time within this many minutes of now (Sydney) is treated as "submit now" (user has time to review)
+# Trigger time within this many minutes of now (user's local time) is treated as "submit now" (user has time to review)
 IMMEDIATE_WINDOW_MINUTES = 5
 MAX_SCHEDULE_DAYS = 14
+# Allow order time up to this many seconds in the past (user's local) so "NOW" rounded to the minute still validates after a short delay
+ORDER_TIME_TOLERANCE_SECONDS = 600
 
-try:
-    SYDNEY_TZ = ZoneInfo("Australia/Sydney")
-except ZoneInfoNotFoundError:
-    SYDNEY_TZ = None  # Windows: install tzdata (pip install tzdata)
+DEFAULT_ORDER_TZ = "Australia/Sydney"
 
 
-def _parse_order_datetime_sydney(value: str) -> datetime | None:
-    """Parse order_date_time as Sydney local time. Accepts YYYY-MM-DDTHH:mm or YYYY-MM-DDTHH:mm:ss."""
-    if SYDNEY_TZ is None:
+def _get_zone(tz_name: str | None):
+    """Return ZoneInfo for tz_name, or None if unavailable/invalid."""
+    if not (tz_name or "").strip():
+        tz_name = DEFAULT_ORDER_TZ
+    try:
+        return ZoneInfo(tz_name.strip())
+    except (ZoneInfoNotFoundError, Exception):
+        return None
+
+
+def _parse_order_datetime_local(value: str, tz_name: str | None) -> datetime | None:
+    """Parse order_date_time as local time in the given IANA timezone. Accepts YYYY-MM-DDTHH:mm or YYYY-MM-DDTHH:mm:ss."""
+    zi = _get_zone(tz_name)
+    if zi is None:
         return None
     value = (value or "").strip()
     if not value:
@@ -65,7 +75,7 @@ def _parse_order_datetime_sydney(value: str) -> datetime | None:
     ):
         try:
             dt = datetime.strptime(value, fmt)
-            return dt.replace(tzinfo=SYDNEY_TZ)
+            return dt.replace(tzinfo=zi)
         except ValueError:
             continue
     return None
@@ -94,43 +104,46 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
     """
     Schedule/submit a purchase order for the selected locations and vendor.
 
-    Order date/time is interpreted as Sydney time (AEST/AEDT) and must be
-    current or future. Accepts order date/time, expected delivery date,
-    location codes, vendor code, and line items.
+    Order date/time is interpreted as the user's local time (via order_date_time_zone)
+    and must be current or future. Stored in UTC for trigger. Accepts order date/time,
+    expected delivery date, location codes, vendor code, and line items.
     """
-    if SYDNEY_TZ is None:
+    tz_name = (body.order_date_time_zone or "").strip() or DEFAULT_ORDER_TZ
+    user_tz = _get_zone(tz_name)
+    if user_tz is None:
         raise HTTPException(
-            status_code=503,
-            detail="Timezone data unavailable. On Windows, install tzdata: pip install tzdata",
+            status_code=400,
+            detail=f"Invalid order_date_time_zone: {tz_name!r}. Use an IANA timezone name (e.g. Australia/Sydney).",
         )
-    # Order date/time: Sydney time; must be now or future, up to 14 days ahead
-    order_dt = _parse_order_datetime_sydney(body.order_date_time)
+    # Order date/time: user's local time (tz from order_date_time_zone); must be now or future, up to 14 days ahead. Stored as UTC.
+    order_dt = _parse_order_datetime_local(body.order_date_time, tz_name)
     if not order_dt:
         raise HTTPException(
             status_code=400,
-            detail="Invalid order_date_time format. Use YYYY-MM-DDTHH:mm or YYYY-MM-DDTHH:mm:ss (Sydney time).",
+            detail="Invalid order_date_time format. Use YYYY-MM-DDTHH:mm or YYYY-MM-DDTHH:mm:ss (in your local timezone).",
         )
-    now_sydney = datetime.now(SYDNEY_TZ)  # type: ignore[arg-type]
-    if order_dt < now_sydney:
+    now_local = datetime.now(user_tz)  # type: ignore[arg-type]
+    # Allow up to ORDER_TIME_TOLERANCE_SECONDS in the past so "NOW" (rounded to the minute) still validates after submit delay
+    min_order_time = now_local - timedelta(seconds=ORDER_TIME_TOLERANCE_SECONDS)
+    if order_dt < min_order_time:
         raise HTTPException(
             status_code=400,
-            detail="Order date and time must be current or future (Sydney time AEST/AEDT).",
+            detail="Order date and time must be current or future (in your local timezone).",
         )
-    from datetime import timedelta
 
-    max_schedule = now_sydney + timedelta(days=MAX_SCHEDULE_DAYS)
+    max_schedule = now_local + timedelta(days=MAX_SCHEDULE_DAYS)
     if order_dt > max_schedule:
         raise HTTPException(
             status_code=400,
-            detail=f"Order date and time cannot be more than {MAX_SCHEDULE_DAYS} days in the future (Sydney time).",
+            detail=f"Order date and time cannot be more than {MAX_SCHEDULE_DAYS} days in the future (in your local timezone).",
         )
     # Within immediate window → submit now (trigger time recorded as actual submit time)
-    immediate_threshold = now_sydney + timedelta(minutes=IMMEDIATE_WINDOW_MINUTES)
+    immediate_threshold = now_local + timedelta(minutes=IMMEDIATE_WINDOW_MINUTES)
     submit_immediately = order_dt <= immediate_threshold
 
-    # Expected delivery date must be on or after order date (Sydney), and today or future
-    order_date_sydney = order_dt.date()
-    today_sydney = now_sydney.date()
+    # Expected delivery date must be on or after order date, and today or future (in user's local date)
+    order_date_local = order_dt.date()
+    today_local = now_local.date()
 
     expected_delivery = (body.expected_delivery_date or "").strip()
     if not expected_delivery:
@@ -144,12 +157,12 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
             status_code=400,
             detail="Expected delivery date must be YYYY-MM-DD.",
         )
-    if delivery_date < order_date_sydney:
+    if delivery_date < order_date_local:
         raise HTTPException(
             status_code=400,
             detail="Expected delivery date cannot be before the order date & time.",
         )
-    if delivery_date < today_sydney:
+    if delivery_date < today_local:
         raise HTTPException(
             status_code=400,
             detail="Expected delivery date must be today or in the future.",
@@ -172,12 +185,12 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                 )
             try:
                 d = datetime.strptime(ed, "%Y-%m-%d").date()
-                if d < order_date_sydney:
+                if d < order_date_local:
                     raise HTTPException(
                         status_code=400,
                         detail=f"Expected delivery date for location index {i} cannot be before the order date & time.",
                     )
-                if d < today_sydney:
+                if d < today_local:
                     raise HTTPException(
                         status_code=400,
                         detail=f"Expected delivery date for location index {i} must be today or future.",
@@ -322,10 +335,7 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
     if submit_immediately:
         set_order_utc = now_utc
     else:
-        order_dt_sydney = _parse_order_datetime_sydney(body.order_date_time)
-        set_order_utc = (
-            order_dt_sydney.astimezone(timezone.utc) if order_dt_sydney else now_utc
-        )
+        set_order_utc = order_dt.astimezone(timezone.utc)
 
     # Persist to CTH (one header per location; reuse order_number by index or single for all)
     location_details_list = body.location_details or []
@@ -436,7 +446,7 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
             f" Order number(s): {', '.join(order_numbers)}" if order_numbers else ""
         )
     else:
-        message = f"Order scheduled for {body.order_date_time} (Sydney). It will be sent to the vendor at that time."
+        message = f"Order scheduled for {body.order_date_time} (your local time). It will be sent to the vendor at that time."
     return PurchaseOrderSubmitResponse(
         success=True,
         message=message,

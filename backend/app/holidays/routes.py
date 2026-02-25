@@ -9,7 +9,7 @@ router = APIRouter()
 SUPPORTED_COUNTRY_CODES = {"AU", "US"}
 
 
-@router.get("/", response_model=HolidaysResponse)
+@router.get("", response_model=HolidaysResponse)
 async def get_holidays(country: str = "AU"):
     """
     Get public holidays for a given country (trial API: country only).

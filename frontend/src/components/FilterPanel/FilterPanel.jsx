@@ -107,10 +107,25 @@ export default function FilterPanel({
   });
 
   const toggleSection = (section) => {
-    setExpandedSections((prev) => ({
-      ...prev,
-      [section]: !prev[section],
-    }));
+    setExpandedSections((prev) => {
+      const isCurrentlyExpanded = prev[section];
+      if (isCurrentlyExpanded) {
+        // Clicking the open section: just collapse it
+        return { ...prev, [section]: false };
+      }
+      // Opening a section: collapse all others and expand this one
+      return {
+        markets: false,
+        countries: false,
+        states: false,
+        locations: false,
+        vendors: false,
+        distributionCenters: false,
+        deliveryDays: false,
+        orderingDays: false,
+        [section]: true,
+      };
+    });
   };
 
   const toggleAllSections = () => {

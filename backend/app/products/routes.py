@@ -1,5 +1,8 @@
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Query
 from app.core.crunchtime_api import ct_headers, service_token, get_async_client
+from .catalogue_sync import run_product_catalogue_sync
 from .schemas import CompanyProductsResponse, VendorProductPricingResponse
 
 router = APIRouter()
@@ -163,3 +166,21 @@ async def get_vendor_product_pricing(
         data=items,
         count=len(items),
     )
+
+
+@router.post("/fetch-meta-data")
+async def fetch_meta_data(minutes_since_update: int | None = Query(None)):
+    """
+    Manually trigger the product catalogue sync: fetch from Crunchtime
+    getCompanyProductsEnhancedByPage (pageSize=100) and upsert into CTH tables.
+    Optional minutes_since_update for delta sync.
+    """
+    result = await asyncio.to_thread(
+        run_product_catalogue_sync, minutes_since_update=minutes_since_update
+    )
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=502 if result.get("error") == "http" else 500,
+            detail=result.get("message", "Sync failed"),
+        )
+    return result

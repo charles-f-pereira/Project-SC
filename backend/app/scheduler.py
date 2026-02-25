@@ -92,11 +92,16 @@ def run_scheduled_po_job():
             (now_utc, MAX_ATTEMPTS, retry_cutoff),
         )
         rows = cur.fetchall()
+        due_count = len(rows)
+        logger.info(
+            "scheduled_po_job: run at %s UTC, due_count=%s",
+            now_utc.isoformat(),
+            due_count,
+        )
         if rows:
             logger.info(
-                "scheduled_po_job: found %s SCHEDULED order(s) due at %s UTC",
-                len(rows),
-                now_utc.isoformat(),
+                "scheduled_po_job: processing %s SCHEDULED order(s)",
+                due_count,
             )
 
         for hdr_id, location_code, vendor_code, expected_delivery in rows:

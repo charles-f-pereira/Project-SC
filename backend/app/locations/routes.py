@@ -6,7 +6,7 @@ from .schemas import LocationResponse
 router = APIRouter()
 
 
-@router.get("/", response_model=LocationResponse)
+@router.get("", response_model=LocationResponse)
 async def get_all_locations(activeFlag: bool | None = None):
     """
     Get all locations from Crunchtime.

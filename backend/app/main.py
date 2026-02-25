@@ -1,3 +1,7 @@
+import logging
+from logging.handlers import TimedRotatingFileHandler
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -11,6 +15,31 @@ from app.holidays.routes import router as holidays_router
 from app.purchase_orders.routes import router as purchase_orders_router
 from app.products.routes import router as products_router
 from app.scheduler import run_scheduled_po_job
+
+# Scheduler log: daily rotation, keep 30 days
+SCHEDULER_LOG_BACKUP_DAYS = 30
+SCHEDULER_LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
+
+
+def _setup_scheduler_logging():
+    """Configure dedicated file logging for the scheduler (rotation + 30-day retention)."""
+    SCHEDULER_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_file = SCHEDULER_LOG_DIR / "scheduler.log"
+    handler = TimedRotatingFileHandler(
+        log_file,
+        when="midnight",
+        interval=1,
+        backupCount=SCHEDULER_LOG_BACKUP_DAYS,
+        encoding="utf-8",
+    )
+    handler.suffix = "%Y-%m-%d"
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    )
+    scheduler_logger = logging.getLogger("app.scheduler")
+    scheduler_logger.addHandler(handler)
+    scheduler_logger.setLevel(logging.INFO)
+
 
 app = FastAPI(
     title="Project SC API", description="Ordering & Delivery Schedule Administration"
@@ -42,8 +71,9 @@ async def _startup_banner():
     print(
         "[startup] Routers: locations, vendors, schedules, holidays, purchase_orders, products"
     )
+    _setup_scheduler_logging()
     _scheduler.start()
-    print("[startup] APScheduler started (scheduled PO job every 2 min)")
+    print("[startup] APScheduler started (scheduled PO job every 1 min)")
 
 
 @app.on_event("shutdown")

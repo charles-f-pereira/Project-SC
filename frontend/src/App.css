@@ -48,6 +48,12 @@
   opacity: 0.95;
 }
 
+.app-header-status {
+  font-size: 0.8rem;
+  opacity: 0.85;
+  font-style: italic;
+}
+
 /* Hamburger button - Project-CT style */
 .hamburger-btn {
   display: flex;

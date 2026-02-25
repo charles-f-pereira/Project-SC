@@ -15,7 +15,7 @@ _DEBUG_LOG = os.path.normpath(
 )
 
 
-@router.get("/", response_model=VendorResponse)
+@router.get("", response_model=VendorResponse)
 async def get_all_vendors(activeFlag: bool | None = None):
     """
     Get all vendors from Crunchtime.

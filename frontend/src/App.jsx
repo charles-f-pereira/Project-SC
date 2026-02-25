@@ -3,6 +3,7 @@ import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import Dashboard from './pages/Dashboard.jsx';
 import AutoAllocation from './pages/AutoAllocation.jsx';
 import ReviewAutoAllocatedOrders from './pages/ReviewAutoAllocatedOrders.jsx';
+import client from './api/client.js';
 import './App.css';
 
 const COLORS = {
@@ -15,6 +16,7 @@ const COLORS = {
 
 function App() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [fetchingMetaData, setFetchingMetaData] = useState(false);
   const menuContainerRef = useRef(null);
   const menuButtonRef = useRef(null);
   const navigate = useNavigate();
@@ -46,6 +48,21 @@ function App() {
   const navTo = (path) => {
     navigate(path);
     setMenuOpen(false);
+  };
+
+  const handleFetchMetaData = async () => {
+    setMenuOpen(false);
+    setFetchingMetaData(true);
+    try {
+      const { data } = await client.post('/api/products/fetch-meta-data');
+      const msg = data?.message || `Synced ${data?.products_processed ?? 0} products.`;
+      alert(msg);
+    } catch (err) {
+      const detail = err.response?.data?.detail ?? err.message ?? 'Fetch failed';
+      alert(`Fetch Meta Data failed: ${detail}`);
+    } finally {
+      setFetchingMetaData(false);
+    }
   };
 
   const pageTitle =
@@ -108,6 +125,15 @@ function App() {
                     >
                       Review Auto Allocated Orders
                     </button>
+                    <button
+                      type="button"
+                      onClick={handleFetchMetaData}
+                      className="app-menu-item"
+                      disabled={fetchingMetaData}
+                      title="Fetch product catalogue from Crunchtime"
+                    >
+                      {fetchingMetaData ? 'Fetching…' : 'Fetch Meta Data'}
+                    </button>
                   </div>
                 </div>
               )}
@@ -115,6 +141,9 @@ function App() {
             <div className="app-header-titles">
               <h1>Project SC</h1>
               <p>{pageTitle}</p>
+              {fetchingMetaData && (
+                <p className="app-header-status">Fetching meta data…</p>
+              )}
             </div>
           </div>
         </div>

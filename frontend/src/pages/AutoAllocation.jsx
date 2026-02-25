@@ -64,7 +64,6 @@ function extractMarket(loc) {
 }
 
 const MAX_PRODUCT_LINES = 10;
-const SYDNEY_TZ = 'Australia/Sydney';
 
 /** True if the search term looks like a product number (e.g. P-10003, ABC-123). */
 function looksLikeProductNumber(term) {
@@ -109,11 +108,10 @@ function buildVendorPricingRows(apiData, includeAlt) {
   return rows;
 }
 
-/** Current date/time in Sydney (AEST/AEDT) as YYYY-MM-DDTHH:mm for comparison and min attribute */
-function getNowSydneyLocal() {
+/** Current date/time in user's local timezone as YYYY-MM-DDTHH:mm for order datetime min and Now button */
+function getNowLocal() {
   const d = new Date();
   const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: SYDNEY_TZ,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -131,11 +129,10 @@ function getNowSydneyLocal() {
   return `${year}-${month}-${day}T${hour}:${minute}`;
 }
 
-/** Max order date/time: 14 days from now in Sydney, same format as datetime-local (YYYY-MM-DDTHH:mm) */
-function getMaxOrderDateTimeSydney() {
+/** Max order date/time: 14 days from now in user's local timezone (YYYY-MM-DDTHH:mm) */
+function getMaxOrderDateTimeLocal() {
   const d = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
   const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: SYDNEY_TZ,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -153,11 +150,10 @@ function getMaxOrderDateTimeSydney() {
   return `${year}-${month}-${day}T${hour}:${minute}`;
 }
 
-/** Today's date in Sydney as YYYY-MM-DD for date inputs and validation. */
-function getTodaySydneyDate() {
+/** Today's date in user's local timezone as YYYY-MM-DD for date inputs and validation */
+function getTodayLocal() {
   const d = new Date();
   const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: SYDNEY_TZ,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -167,18 +163,18 @@ function getTodaySydneyDate() {
   return `${get('year')}-${get('month').padStart(2, '0')}-${get('day').padStart(2, '0')}`;
 }
 
-/** Date part of order date/time (YYYY-MM-DD) for min expected delivery. Order date/time is Sydney. */
+/** Date part of order date/time (YYYY-MM-DD) for min expected delivery */
 function getOrderDatePart(orderDateTime) {
   const s = (orderDateTime || '').trim().slice(0, 10);
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
   return null;
 }
 
-/** Min expected delivery date: order date if set, otherwise today (Sydney). */
+/** Min expected delivery date: order date if set, otherwise today (user's local) */
 function getMinExpectedDeliveryDate(orderDateTime) {
   const orderDate = getOrderDatePart(orderDateTime);
   if (orderDate) return orderDate;
-  return getTodaySydneyDate();
+  return getTodayLocal();
 }
 
 export default function AutoAllocation() {
@@ -382,6 +378,11 @@ export default function AutoAllocation() {
     const effectiveDate = orderDateToEffectiveDate(orderDateTime);
     if (!effectiveDate) {
       setProductsError('Please set Order date & time to search products.');
+      setProductsSearched(true);
+      return;
+    }
+    if (!expectedDeliveryDate.trim()) {
+      setProductsError('Please set Expected delivery date to search products.');
       setProductsSearched(true);
       return;
     }
@@ -668,7 +669,7 @@ export default function AutoAllocation() {
       return;
     }
     const orderDatePart = getOrderDatePart(orderDateTime);
-    const minDeliveryDate = orderDatePart || getTodaySydneyDate();
+    const minDeliveryDate = orderDatePart || getTodayLocal();
     if (expectedDeliveryDate < minDeliveryDate) {
       setSubmitResult({
         success: false,
@@ -680,9 +681,9 @@ export default function AutoAllocation() {
       setSubmitResult({ success: false, message: 'Set the order date and time.' });
       return;
     }
-    const nowSydney = getNowSydneyLocal();
-    if (orderDateTime < nowSydney) {
-      setSubmitResult({ success: false, message: 'Order date & time must be current or future.' });
+    const nowLocal = getNowLocal();
+    if (orderDateTime < nowLocal) {
+      setSubmitResult({ success: false, message: 'Order date & time must be current or future (in your local timezone).' });
       return;
     }
     if (approvedRows.length === 0) {
@@ -762,8 +763,11 @@ export default function AutoAllocation() {
       return;
     }
     const fallbackLineItems = location_line_items.find((arr) => arr.length > 0) || [];
+    // Send user's local timezone so backend validates order date/time in local time (stored as UTC)
+    const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     const payload = {
       order_date_time: orderDateTime.length <= 16 ? `${orderDateTime}:00` : orderDateTime,
+      order_date_time_zone: userTimeZone,
       expected_delivery_date: expectedDeliveryDate,
       expected_delivery_dates,
       location_codes: locationCodesOrdered,
@@ -837,18 +841,22 @@ export default function AutoAllocation() {
                   type="datetime-local"
                   value={orderDateTime}
                   onChange={(e) => setOrderDateTime(e.target.value)}
-                  min={getNowSydneyLocal()}
-                  max={getMaxOrderDateTimeSydney()}
+                  min={getNowLocal()}
+                  max={getMaxOrderDateTimeLocal()}
                   className="order-datetime-input"
                 />
                 <button
                   type="button"
-                  onClick={() => setOrderDateTime(getNowSydneyLocal())}
+                  onClick={() => setOrderDateTime(getNowLocal())}
                   className="product-search-btn"
                 >
                   Now
                 </button>
               </div>
+              <p className="order-datetime-tz-note">
+                Note: Date/Time is in your local time zone, remember to take this into consideration
+                when placing orders for other states/countries.
+              </p>
             </section>
             <section className="auto-allocation-section expected-delivery-section date-tile">
               <h2>Expected delivery date</h2>
@@ -869,10 +877,16 @@ export default function AutoAllocation() {
           <section className="auto-allocation-section products-section">
             <h2>Products</h2>
             <p className="section-note">
-              Select one Vendor and one Market in the filters, set Order date & time, then search by
-              product name or number. Click a row to add to the order. Max {MAX_PRODUCT_LINES}{' '}
-              products.
+              Set Order date &amp; time and Expected delivery date above, select one Vendor and one
+              Market in the filters, then search by product name or number. Click a row to add to
+              the order. Max {MAX_PRODUCT_LINES} products.
             </p>
+            {!orderDateTime.trim() || !expectedDeliveryDate.trim() ? (
+              <p className="products-required-dates-msg">
+                Set <strong>Order date &amp; time</strong> and <strong>Expected delivery date</strong>{' '}
+                above to search and display products.
+              </p>
+            ) : null}
             <div className="product-search-row">
               <input
                 type="text"
@@ -881,12 +895,14 @@ export default function AutoAllocation() {
                 onChange={(e) => setProductSearch(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && fetchProducts()}
                 className="product-search-input"
-                disabled={productsLoading}
+                disabled={productsLoading || !orderDateTime.trim() || !expectedDeliveryDate.trim()}
               />
               <button
                 type="button"
                 onClick={fetchProducts}
-                disabled={productsLoading}
+                disabled={
+                  productsLoading || !orderDateTime.trim() || !expectedDeliveryDate.trim()
+                }
                 className="product-search-btn"
               >
                 {productsLoading ? 'Searching...' : 'Search'}
@@ -895,6 +911,8 @@ export default function AutoAllocation() {
                 type="button"
                 onClick={addSelectedProductsToTable}
                 disabled={
+                  !orderDateTime.trim() ||
+                  !expectedDeliveryDate.trim() ||
                   productDisplayRows.length === 0 ||
                   productSelection.size === 0 ||
                   lineItems.length >= MAX_PRODUCT_LINES
@@ -920,13 +938,23 @@ export default function AutoAllocation() {
             </div>
             {productsError && <p className="products-error-msg">{productsError}</p>}
             <div className="product-catalogue-table-wrap">
-              {!productsSearched && (
+              {(!orderDateTime.trim() || !expectedDeliveryDate.trim()) && (
                 <p className="no-products-msg">
-                  Select one Vendor and one Market, set Order date & time, then enter a product name
-                  or number and click Search.
+                  Set Order date &amp; time and Expected delivery date above to search and display
+                  products.
                 </p>
               )}
-              {productsSearched &&
+              {orderDateTime.trim() &&
+                expectedDeliveryDate.trim() &&
+                !productsSearched && (
+                  <p className="no-products-msg">
+                    Select one Vendor and one Market, then enter a product name or number and click
+                    Search.
+                  </p>
+                )}
+              {orderDateTime.trim() &&
+                expectedDeliveryDate.trim() &&
+                productsSearched &&
                 !productsLoading &&
                 productDisplayRows.length === 0 &&
                 !productsError && (
@@ -934,7 +962,9 @@ export default function AutoAllocation() {
                     No products found. Try a different name or number.
                   </p>
                 )}
-              {productDisplayRows.length > 0 && (
+              {orderDateTime.trim() &&
+                expectedDeliveryDate.trim() &&
+                productDisplayRows.length > 0 && (
                 <>
                   <table className="product-catalogue-table">
                     <thead>

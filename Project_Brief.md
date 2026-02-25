@@ -93,6 +93,21 @@ Transactional records for Auto Allocation submissions are persisted in PostgreSQ
 
 **SQL script:** [`backend/sql/cth_auto_allocation_tables.sql`](backend/sql/cth_auto_allocation_tables.sql) — run against the database to create the schema and tables. For existing databases, [`backend/sql/migrate_scheduled_po_columns.sql`](backend/sql/migrate_scheduled_po_columns.sql) adds the workflow and replay columns.
 
+### Product catalogue (CTH)
+
+Tables for a local product catalogue built from Crunchtime **getAllCompanyProductsEnhanced** (or **getCompanyProductsEnhancedByPage**) and **getAllCategories**, used in a later phase to support efficient product search and filter (e.g. by concept, department, UDC, category) without requiring an explicit product name/number on every API call.
+
+| Table | Purpose |
+|-------|--------|
+| `CTH.CompanyProduct` | One row per company product; columns from `companyProductEnhancedHeaderDetails` (number, name, active_flag, category_name, subcategory_name, microcategory_name, etc.; optional raw_json JSONB). |
+| `CTH.Concept` | Lookup from `companyProductEnhancedConceptDetails` (code, active_flag). Filter products by concept. |
+| `CTH.Department` | Lookup from `companyProductEnhancedDepartmentDetails` (code, active_flag). Filter by department. |
+| `CTH.UserDefinedCategories` | Lookup from `companyProductEnhancedUserDefinedCategoryDetails` (code, active_flag). Filter by UDC. |
+| `CTH.Categories` | From **getAllCategories** `category/v1/getAllCategories`; one row per `categoryDetailDetails` element (category_name, subcategory_name, microcategory_name, gl_description, gl_number). |
+| `CTH.CompanyProductConcept`, `CTH.CompanyProductDepartment`, `CTH.CompanyProductUserDefinedCategory` | Junction tables (many-to-many) linking products to concepts, departments, and UDCs. |
+
+**SQL script:** [`backend/sql/cth_product_catalogue_tables.sql`](backend/sql/cth_product_catalogue_tables.sql) — run after the Auto Allocation script (schema CTH already exists). Catalogue load/sync (Python calling the APIs and populating these tables) and product search/filter using them are planned for a later phase.
+
 ## Crunchtime API Endpoints
 
 ### Required Endpoints (from Project-CT patterns)
@@ -124,15 +139,21 @@ Transactional records for Auto Allocation submissions are persisted in PostgreSQ
 
 The following Crunchtime API endpoints are required for Phase 1 batch purchase order functionality. Patterns and references may exist in **Project-CT**; they will be implemented or extended in this project.
 
-1. **getAllCompanyProductsEnhancedV1**
-   - Purpose: Build the list of **products available in Crunchtime** to be used when compiling the product definitions available to order.
-   - Usage: Populate product catalog / product definition list for the SC team when creating or reviewing purchase orders.
+1. **getAllCompanyProductsEnhancedV1** / **getCompanyProductsEnhancedByPage**
+   - Purpose: Build the list of **products available in Crunchtime**; also used to build the local product catalogue in CTH (CompanyProduct, Concept, Department, UserDefinedCategories).
+   - Usage: Populate product catalog / product definition list; for large datasets, **getCompanyProductsEnhancedByPage** (paginated) is recommended for catalogue build to avoid timeouts and memory issues.
+   - Reference: [Crunchtime API – getAllCompanyProductsEnhancedV1](https://developer.crunchtime.com/reference/getallcompanyproductsenhancedv1usingget), [getCompanyProductsEnhancedByPage](https://developer.crunchtime.com/reference/getcompanyproductsenhancedbypagev1usingget).
 
-2. **getAllVendorProductPricing**
+2. **getAllCategories** (category/v1/getAllCategories)
+   - Purpose: Build the **category catalogue** stored in `CTH.Categories` for product filters.
+   - Token: `CRUNCHTIME_CATEGORY_TOKEN_TEST` (optional in .env).
+   - Reference: [Crunchtime API – getAllCategories](https://developer.crunchtime.com/reference/getallcategoryv1usingget).
+
+3. **getAllVendorProductPricing**
    - Purpose: Retrieve **vendor-specific data** (e.g. pricing, availability) for products from the `getAllCompanyProductsEnhancedV1` dataset.
    - Usage: Show vendor-specific product options and pricing when placing purchase orders for a given vendor/location.
 
-3. **savePurchaseOrders**
+4. **savePurchaseOrders**
    - Purpose: **Submit/place purchase orders** in Crunchtime.
    - Usage: Allow the SC team to place batch/bulk purchase orders (e.g. for the new sauce) so that orders are recorded in Crunchtime and can be fulfilled by the vendor for delivery to the restaurant/location by launch date.
 
@@ -328,6 +349,7 @@ CRUNCHTIME_HIERARCHY_TOKEN_TEST=<token>
 CRUNCHTIME_VENDOR_TOKEN_TEST=<token>
 CRUNCHTIME_VENDOR_LOCATION_TOKEN_TEST=<token>
 CRUNCHTIME_COMPANY_PRODUCT_ENHANCED_TOKEN_TEST=<token>
+CRUNCHTIME_CATEGORY_TOKEN_TEST=<token>
 sitename=<site>
 userid=<user>
 password=<password>

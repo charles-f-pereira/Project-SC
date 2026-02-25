@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import client from '../api/client.js';
+import { formatDateTimeLocal } from '../utils/dateFormat.js';
 import './ReviewAutoAllocatedOrders.css';
 
 const DEFAULT_LIMIT = 100;
@@ -283,28 +284,10 @@ export default function ReviewAutoAllocatedOrders() {
                     </td>
                     <td>{tx.setExpectedDeliveryDOW ?? '—'}</td>
                     <td>
-                      {tx.setOrderDateTme
-                        ? new Date(tx.setOrderDateTme).toLocaleString(undefined, {
-                            year: 'numeric',
-                            month: '2-digit',
-                            day: '2-digit',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            hour12: false,
-                          })
-                        : '—'}
+                      {tx.setOrderDateTme ? formatDateTimeLocal(tx.setOrderDateTme) || '—' : '—'}
                     </td>
                     <td>
-                      {tx.submittedDateTime
-                        ? new Date(tx.submittedDateTime).toLocaleString(undefined, {
-                            year: 'numeric',
-                            month: '2-digit',
-                            day: '2-digit',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            hour12: false,
-                          })
-                        : '—'}
+                      {tx.submittedDateTime ? formatDateTimeLocal(tx.submittedDateTime) || '—' : '—'}
                     </td>
                     <td>
                       {tx.transactionNo ? (

@@ -31,7 +31,11 @@ class PurchaseOrderSubmitRequest(BaseModel):
 
     order_date_time: str = Field(
         ...,
-        description="Order date and time (ISO 8601 or YYYY-MM-DDTHH:mm) when the order is to be placed/scheduled",
+        description="Order date and time (ISO 8601 or YYYY-MM-DDTHH:mm) when the order is to be placed/scheduled, in the user's local timezone",
+    )
+    order_date_time_zone: Optional[str] = Field(
+        None,
+        description="IANA timezone name for order_date_time (e.g. Australia/Sydney, America/New_York). If omitted, defaults to Australia/Sydney.",
     )
     expected_delivery_date: str = Field(
         ...,
