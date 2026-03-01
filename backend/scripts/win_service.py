@@ -1,4 +1,4 @@
-"""
+r"""
 Windows service wrapper for the Project SC backend (FastAPI + APScheduler).
 
 Requires: pip install pywin32
@@ -19,7 +19,6 @@ Remove:
 import os
 import subprocess
 import sys
-import time
 
 # Resolve backend directory (parent of scripts/)
 _BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -27,10 +26,9 @@ _VENV_PYTHON = os.path.join(_BACKEND_DIR, "venv", "Scripts", "python.exe")
 _PYTHON = _VENV_PYTHON if os.path.isfile(_VENV_PYTHON) else sys.executable
 
 try:
-    import win32serviceutil
-    import win32service
-    import win32event
-    import win32api
+    import win32serviceutil  # pyright: ignore[reportMissingModuleSource]
+    import win32service  # pyright: ignore[reportMissingModuleSource]
+    import win32event  # pyright: ignore[reportMissingModuleSource]
 except ImportError:
     print("pywin32 is required. Run: pip install pywin32", file=sys.stderr)
     sys.exit(1)

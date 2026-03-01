@@ -13,7 +13,9 @@ from app.core.config import (
     PG_PORT,
 )
 from app.core.crunchtime_api import ct_headers, get_async_client, service_token
-from app.purchase_orders.location_product_pricing import save_location_product_pricing_sync
+from app.purchase_orders.location_product_pricing import (
+    save_location_product_pricing_sync,
+)
 from app.purchase_orders.schemas import (
     PurchaseOrderSubmitRequest,
     PurchaseOrderSubmitResponse,
@@ -55,10 +57,11 @@ DEFAULT_ORDER_TZ = "Australia/Sydney"
 
 def _get_zone(tz_name: str | None):
     """Return ZoneInfo for tz_name, or None if unavailable/invalid."""
-    if not (tz_name or "").strip():
-        tz_name = DEFAULT_ORDER_TZ
+    name = (tz_name or DEFAULT_ORDER_TZ or "").strip()
+    if not name:
+        return None
     try:
-        return ZoneInfo(tz_name.strip())
+        return ZoneInfo(name)
     except (ZoneInfoNotFoundError, Exception):
         return None
 
@@ -287,7 +290,8 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
             vo_products = [
                 (li.product_number or "").strip()
                 for li in valid_lines
-                if getattr(li, "temp_activate_vo", False) and (li.product_number or "").strip()
+                if getattr(li, "temp_activate_vo", False)
+                and (li.product_number or "").strip()
             ]
             if vo_products:
                 locations_to_activate.append((loc_code, vo_products))

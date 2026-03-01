@@ -351,8 +351,7 @@ export default function FilterPanel({
 
   const filteredVendors = useMemo(() => {
     return vendors.filter((v) => {
-      const vendorCode =
-        v.code || v.vendorCode || v.Code || v.supplyCode || '';
+      const vendorCode = v.code || v.vendorCode || v.Code || v.supplyCode || '';
       const vendorCodeStr = String(vendorCode).trim();
 
       // Filter by country if countries are selected

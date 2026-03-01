@@ -39,6 +39,7 @@ def _get_pg_connection():
     except Exception:
         return None
 
+
 # Crunchtime getAllCompanyProductsEnhanced (companyproduct/v1) – kept for later phases
 GET_ALL_COMPANY_PRODUCTS_ENHANCED_PATH = (
     "/companyproduct/v1/getAllCompanyProductsEnhanced"
@@ -258,8 +259,12 @@ def get_catalogue_filter_options():
 
 @router.get("/catalogue", response_model=CatalogueResponse)
 def get_catalogue_products(
-    product_number: str | None = Query(None, description="Filter by product number (wildcard)"),
-    product_name: str | None = Query(None, description="Filter by product name (wildcard)"),
+    product_number: str | None = Query(
+        None, description="Filter by product number (wildcard)"
+    ),
+    product_name: str | None = Query(
+        None, description="Filter by product name (wildcard)"
+    ),
     category_name: list[str] | None = Query(
         None, description="Filter by category name(s); multiple allowed"
     ),
@@ -286,11 +291,18 @@ def get_catalogue_products(
 
         if product_number and product_number.strip():
             conditions.append("number ILIKE %s")
-            params.append("%" + product_number.strip().replace("%", "\\%").replace("_", "\\_") + "%")
+            params.append(
+                "%"
+                + product_number.strip().replace("%", "\\%").replace("_", "\\_")
+                + "%"
+            )
         if product_name and product_name.strip():
             conditions.append("(name ILIKE %s OR COALESCE(display_name, '') ILIKE %s)")
-            pn = "%" + product_name.strip().replace("%", "\\%").replace("_", "\\_") + "%"
+            pn = (
+                "%" + product_name.strip().replace("%", "\\%").replace("_", "\\_") + "%"
+            )
             params.extend([pn, pn])
+
         def _ensure_list(val):
             if val is None:
                 return []
@@ -347,7 +359,9 @@ def get_catalogue_products(
             pass
 
 
-@router.post("/vendor-product-pricing-batch", response_model=VendorProductPricingResponse)
+@router.post(
+    "/vendor-product-pricing-batch", response_model=VendorProductPricingResponse
+)
 async def get_vendor_product_pricing_batch(body: VendorProductPricingBatchRequest):
     """
     For each product number (max 10), call Crunchtime getAllVendorProductPricing once.

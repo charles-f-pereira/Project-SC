@@ -20,7 +20,9 @@ from app.core.config import (
     PG_PORT,
 )
 from app.core.crunchtime_api import ct_headers, service_token
-from app.purchase_orders.location_product_pricing import save_location_product_pricing_sync
+from app.purchase_orders.location_product_pricing import (
+    save_location_product_pricing_sync,
+)
 
 logger = logging.getLogger(__name__)
 

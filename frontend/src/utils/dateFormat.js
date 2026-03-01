@@ -5,12 +5,22 @@
  */
 
 const MONTH_ABBREV = [
-  'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
-  'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC',
-]
+  'JAN',
+  'FEB',
+  'MAR',
+  'APR',
+  'MAY',
+  'JUN',
+  'JUL',
+  'AUG',
+  'SEP',
+  'OCT',
+  'NOV',
+  'DEC',
+];
 
 function pad2(n) {
-  return String(n).padStart(2, '0')
+  return String(n).padStart(2, '0');
 }
 
 /**
@@ -21,20 +31,20 @@ function pad2(n) {
  * @returns {string} Formatted string or "" if invalid
  */
 export function formatDateDisplay(value) {
-  if (value == null) return ''
-  const str = typeof value === 'string' ? value.trim().slice(0, 10) : ''
+  if (value == null) return '';
+  const str = typeof value === 'string' ? value.trim().slice(0, 10) : '';
   if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
-    const [, y, m, d] = str.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-    const monthIndex = parseInt(m, 10) - 1
-    if (monthIndex < 0 || monthIndex > 11) return ''
-    return `${pad2(parseInt(d, 10))}-${MONTH_ABBREV[monthIndex]}-${y}`
+    const [, y, m, d] = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const monthIndex = parseInt(m, 10) - 1;
+    if (monthIndex < 0 || monthIndex > 11) return '';
+    return `${pad2(parseInt(d, 10))}-${MONTH_ABBREV[monthIndex]}-${y}`;
   }
-  const d = typeof value === 'string' ? new Date(value) : value
-  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return ''
-  const day = d.getDate()
-  const month = d.getMonth()
-  const year = d.getFullYear()
-  return `${pad2(day)}-${MONTH_ABBREV[month]}-${year}`
+  const d = typeof value === 'string' ? new Date(value) : value;
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '';
+  const day = d.getDate();
+  const month = d.getMonth();
+  const year = d.getFullYear();
+  return `${pad2(day)}-${MONTH_ABBREV[month]}-${year}`;
 }
 
 /**
@@ -44,15 +54,15 @@ export function formatDateDisplay(value) {
  * @returns {string} Formatted string or "" if invalid
  */
 export function formatDateTimeDisplay(value) {
-  if (value == null) return ''
-  const d = typeof value === 'string' ? new Date(value) : value
-  if (Number.isNaN(d.getTime())) return ''
-  const day = d.getDate()
-  const month = d.getMonth()
-  const year = d.getFullYear() % 100
-  const hours = d.getHours()
-  const minutes = d.getMinutes()
-  return `${pad2(day)}-${MONTH_ABBREV[month]}-${pad2(year)} ${pad2(hours)}:${pad2(minutes)}`
+  if (value == null) return '';
+  const d = typeof value === 'string' ? new Date(value) : value;
+  if (Number.isNaN(d.getTime())) return '';
+  const day = d.getDate();
+  const month = d.getMonth();
+  const year = d.getFullYear() % 100;
+  const hours = d.getHours();
+  const minutes = d.getMinutes();
+  return `${pad2(day)}-${MONTH_ABBREV[month]}-${pad2(year)} ${pad2(hours)}:${pad2(minutes)}`;
 }
 
 /**
@@ -62,9 +72,9 @@ export function formatDateTimeDisplay(value) {
  * @returns {string} Formatted string e.g. "06/02/2025, 14:30" or "" if invalid
  */
 export function formatDateTimeLocal(value) {
-  if (value == null) return ''
-  const d = typeof value === 'string' ? new Date(value) : value
-  if (Number.isNaN(d.getTime())) return ''
+  if (value == null) return '';
+  const d = typeof value === 'string' ? new Date(value) : value;
+  if (Number.isNaN(d.getTime())) return '';
   return d.toLocaleString(undefined, {
     year: 'numeric',
     month: '2-digit',
@@ -72,5 +82,5 @@ export function formatDateTimeLocal(value) {
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
-  })
+  });
 }

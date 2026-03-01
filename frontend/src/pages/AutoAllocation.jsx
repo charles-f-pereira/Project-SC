@@ -416,7 +416,13 @@ export default function AutoAllocation() {
       }
     });
     return Array.from(countries).sort();
-  }, [locations, locationsForFilterOptions, filters.states, filters.locations, hierarchyLocationCodes]);
+  }, [
+    locations,
+    locationsForFilterOptions,
+    filters.states,
+    filters.locations,
+    hierarchyLocationCodes,
+  ]);
 
   const availableStates = useMemo(() => {
     const states = new Set();
@@ -605,7 +611,9 @@ export default function AutoAllocation() {
     const selected = catalogueProducts.filter((p) => selectedCatalogueIds.has(p.id));
     const productNumbers = selected.map((p) => p.number).filter(Boolean);
     if (productNumbers.length === 0) {
-      setProductsError('Select up to 10 products from the catalogue above, then click Show Vendor Products.');
+      setProductsError(
+        'Select up to 10 products from the catalogue above, then click Show Vendor Products.',
+      );
       return;
     }
     if (productNumbers.length > MAX_CATALOGUE_SELECT) {
@@ -688,17 +696,17 @@ export default function AutoAllocation() {
     const key = `${vpn}|${vu}`;
     const alreadyExists = lineItems.some((li) => lineItemKey(li) === key);
     if (alreadyExists) return;
-        const id = `${product.vendorProductNumber || product.id || Date.now()}-${lineItems.length}`;
-        const newItem = {
-          id,
-          productName: product.productName || product.name || '—',
-          productNumber: product.productNumber ?? product.productNo ?? null,
-          vendorProductNumber: product.vendorProductNumber || product.vendorProductNo || '—',
-          vendorUnit: product.vendorUnit || product.unit || '—',
-          qty: 0,
-          tempActivateVO: tempActivateVOSelection.has(product.id || ''),
-        };
-        setLineItems((prev) => [...prev, newItem]);
+    const id = `${product.vendorProductNumber || product.id || Date.now()}-${lineItems.length}`;
+    const newItem = {
+      id,
+      productName: product.productName || product.name || '—',
+      productNumber: product.productNumber ?? product.productNo ?? null,
+      vendorProductNumber: product.vendorProductNumber || product.vendorProductNo || '—',
+      vendorUnit: product.vendorUnit || product.unit || '—',
+      qty: 0,
+      tempActivateVO: tempActivateVOSelection.has(product.id || ''),
+    };
+    setLineItems((prev) => [...prev, newItem]);
   };
 
   const addSelectedProductsToTable = () => {
@@ -913,7 +921,10 @@ export default function AutoAllocation() {
     }
     const minOrderTime = getMinOrderTimeLocal();
     if (orderDateTime < minOrderTime) {
-      setSubmitResult({ success: false, message: 'Order date & time must be current or future (in your local timezone).' });
+      setSubmitResult({
+        success: false,
+        message: 'Order date & time must be current or future (in your local timezone).',
+      });
       return;
     }
     if (approvedRows.length === 0) {
@@ -1110,14 +1121,15 @@ export default function AutoAllocation() {
             <h2>Products</h2>
             <p className="section-note">
               Set Order date &amp; time and Expected delivery date above, select one Vendor and one
-              Market. Filter the product catalogue (wildcards for number/name; dropdowns for category,
-              subcategory, microcategory). Select up to {MAX_CATALOGUE_SELECT} products and click
-              Show Vendor Products, then Add selected to order lines. Max {MAX_PRODUCT_LINES} order lines.
+              Market. Filter the product catalogue (wildcards for number/name; dropdowns for
+              category, subcategory, microcategory). Select up to {MAX_CATALOGUE_SELECT} products
+              and click Show Vendor Products, then Add selected to order lines. Max{' '}
+              {MAX_PRODUCT_LINES} order lines.
             </p>
             {!orderDateTime.trim() || !expectedDeliveryDate.trim() ? (
               <p className="products-required-dates-msg">
-                Set <strong>Order date &amp; time</strong> and <strong>Expected delivery date</strong>{' '}
-                above to search and display products.
+                Set <strong>Order date &amp; time</strong> and{' '}
+                <strong>Expected delivery date</strong> above to search and display products.
               </p>
             ) : null}
             <div className="product-catalogue-filters">
@@ -1232,9 +1244,9 @@ export default function AutoAllocation() {
                   {catalogueProducts.length > 0 && (
                     <>
                       <p className="catalogue-table-hint">
-                        Select up to {MAX_CATALOGUE_SELECT} products, then click Show Vendor Products.{' '}
-                        {selectedCatalogueIds.size > 0 &&
-                          `${selectedCatalogueIds.size} selected.`}
+                        Select up to {MAX_CATALOGUE_SELECT} products, then click Show Vendor
+                        Products.{' '}
+                        {selectedCatalogueIds.size > 0 && `${selectedCatalogueIds.size} selected.`}
                       </p>
                       <table className="product-catalogue-table catalogue-from-pg">
                         <thead>
@@ -1303,8 +1315,8 @@ export default function AutoAllocation() {
             <div className="product-pricing-section">
               <h3 className="product-pricing-heading">Pricing results (from Crunchtime)</h3>
               <p className="section-note">
-                After clicking Show Vendor Products, select rows below and click Add selected to add to order
-                lines.
+                After clicking Show Vendor Products, select rows below and click Add selected to add
+                to order lines.
               </p>
               <div className="product-show-alt-row">
                 <label className="product-show-alt-label">
@@ -1336,7 +1348,9 @@ export default function AutoAllocation() {
                                 }
                                 onChange={(e) => {
                                   if (e.target.checked) {
-                                    setProductSelection(new Set(productDisplayRows.map((r) => r.id)));
+                                    setProductSelection(
+                                      new Set(productDisplayRows.map((r) => r.id)),
+                                    );
                                     setProductSelectAll(true);
                                   } else {
                                     setProductSelection(new Set());
@@ -1419,8 +1433,8 @@ export default function AutoAllocation() {
                   !productsError &&
                   selectedCatalogueIds.size > 0 && (
                     <p className="no-products-msg">
-                      No pricing returned for the selected products. Try different products or
-                      check vendor/market.
+                      No pricing returned for the selected products. Try different products or check
+                      vendor/market.
                     </p>
                   )}
                 {productsSearched &&

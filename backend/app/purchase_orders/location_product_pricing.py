@@ -14,10 +14,14 @@ from app.core.crunchtime_api import ct_headers, service_token
 
 logger = logging.getLogger("app.purchase_orders.location_product_pricing")
 
-SAVE_LOCATION_PRODUCT_PRICING_PATH = "/locationproductpricing/v1/saveLocationProductPricing"
+SAVE_LOCATION_PRODUCT_PRICING_PATH = (
+    "/locationproductpricing/v1/saveLocationProductPricing"
+)
 
 
-def _build_payload(location_code: str, product_numbers: List[str], re_order_vo_flag: str) -> dict:
+def _build_payload(
+    location_code: str, product_numbers: List[str], re_order_vo_flag: str
+) -> dict:
     """Build request body for saveLocationProductPricing."""
     units = [
         {

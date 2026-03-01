@@ -287,7 +287,9 @@ export default function ReviewAutoAllocatedOrders() {
                       {tx.setOrderDateTme ? formatDateTimeDisplay(tx.setOrderDateTme) || '—' : '—'}
                     </td>
                     <td>
-                      {tx.submittedDateTime ? formatDateTimeDisplay(tx.submittedDateTime) || '—' : '—'}
+                      {tx.submittedDateTime
+                        ? formatDateTimeDisplay(tx.submittedDateTime) || '—'
+                        : '—'}
                     </td>
                     <td>
                       {tx.transactionNo ? (

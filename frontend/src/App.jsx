@@ -141,9 +141,7 @@ function App() {
             <div className="app-header-titles">
               <h1>Project SC</h1>
               <p>{pageTitle}</p>
-              {fetchingMetaData && (
-                <p className="app-header-status">Fetching meta data…</p>
-              )}
+              {fetchingMetaData && <p className="app-header-status">Fetching meta data…</p>}
             </div>
           </div>
         </div>
