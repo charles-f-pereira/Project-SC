@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import client from '../api/client.js';
-import { formatDateTimeLocal } from '../utils/dateFormat.js';
+import { formatDateDisplay, formatDateTimeDisplay } from '../utils/dateFormat.js';
 import './ReviewAutoAllocatedOrders.css';
 
 const DEFAULT_LIMIT = 100;
@@ -279,15 +279,15 @@ export default function ReviewAutoAllocatedOrders() {
                     <td>{tx.locationName ?? tx.locationCode ?? '—'}</td>
                     <td>
                       {tx.setExpectedDeliveryDate
-                        ? String(tx.setExpectedDeliveryDate).slice(0, 10)
+                        ? formatDateDisplay(tx.setExpectedDeliveryDate) || '—'
                         : '—'}
                     </td>
                     <td>{tx.setExpectedDeliveryDOW ?? '—'}</td>
                     <td>
-                      {tx.setOrderDateTme ? formatDateTimeLocal(tx.setOrderDateTme) || '—' : '—'}
+                      {tx.setOrderDateTme ? formatDateTimeDisplay(tx.setOrderDateTme) || '—' : '—'}
                     </td>
                     <td>
-                      {tx.submittedDateTime ? formatDateTimeLocal(tx.submittedDateTime) || '—' : '—'}
+                      {tx.submittedDateTime ? formatDateTimeDisplay(tx.submittedDateTime) || '—' : '—'}
                     </td>
                     <td>
                       {tx.transactionNo ? (

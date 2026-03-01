@@ -238,6 +238,7 @@ export default function AutoAllocation() {
   const [submitLoading, setSubmitLoading] = useState(false);
   const [submitResult, setSubmitResult] = useState(null);
   const [productSelection, setProductSelection] = useState(new Set());
+  const [tempActivateVOSelection, setTempActivateVOSelection] = useState(new Set());
   const [productSelectAll, setProductSelectAll] = useState(false);
   const [globalQty, setGlobalQty] = useState('');
   const [reviewApproved, setReviewApproved] = useState(new Set());
@@ -687,16 +688,17 @@ export default function AutoAllocation() {
     const key = `${vpn}|${vu}`;
     const alreadyExists = lineItems.some((li) => lineItemKey(li) === key);
     if (alreadyExists) return;
-    const id = `${product.vendorProductNumber || product.id || Date.now()}-${lineItems.length}`;
-    const newItem = {
-      id,
-      productName: product.productName || product.name || '—',
-      productNumber: product.productNumber ?? product.productNo ?? null,
-      vendorProductNumber: product.vendorProductNumber || product.vendorProductNo || '—',
-      vendorUnit: product.vendorUnit || product.unit || '—',
-      qty: 0,
-    };
-    setLineItems((prev) => [...prev, newItem]);
+        const id = `${product.vendorProductNumber || product.id || Date.now()}-${lineItems.length}`;
+        const newItem = {
+          id,
+          productName: product.productName || product.name || '—',
+          productNumber: product.productNumber ?? product.productNo ?? null,
+          vendorProductNumber: product.vendorProductNumber || product.vendorProductNo || '—',
+          vendorUnit: product.vendorUnit || product.unit || '—',
+          qty: 0,
+          tempActivateVO: tempActivateVOSelection.has(product.id || ''),
+        };
+        setLineItems((prev) => [...prev, newItem]);
   };
 
   const addSelectedProductsToTable = () => {
@@ -722,6 +724,7 @@ export default function AutoAllocation() {
             vendorProductNumber: p.vendorProductNumber || '—',
             vendorUnit: p.vendorUnit || '—',
             qty: 0,
+            tempActivateVO: tempActivateVOSelection.has(p.id),
           },
         ];
       });
@@ -980,6 +983,7 @@ export default function AutoAllocation() {
             vendor_product_number: li.vendorProductNumber,
             vendor_unit: li.vendorUnit || '',
             qty,
+            temp_activate_vo: li.tempActivateVO === true,
           };
         })
         .filter(Boolean);
@@ -1344,6 +1348,7 @@ export default function AutoAllocation() {
                               <span>Select all</span>
                             </label>
                           </th>
+                          <th className="th-vo">Temporarily activate VO mode for this product</th>
                           <th>Market</th>
                           <th>Product Number</th>
                           <th>Product Name</th>
@@ -1367,6 +1372,21 @@ export default function AutoAllocation() {
                                   });
                                 }}
                                 aria-label={`Select ${row.productName}`}
+                              />
+                            </td>
+                            <td className="td-vo">
+                              <input
+                                type="checkbox"
+                                checked={tempActivateVOSelection.has(row.id)}
+                                onChange={(e) => {
+                                  setTempActivateVOSelection((prev) => {
+                                    const next = new Set(prev);
+                                    if (e.target.checked) next.add(row.id);
+                                    else next.delete(row.id);
+                                    return next;
+                                  });
+                                }}
+                                aria-label={`Temporarily activate VO mode for ${row.productName}`}
                               />
                             </td>
                             <td>{row.market}</td>
@@ -1446,6 +1466,7 @@ export default function AutoAllocation() {
                     <th>Product Name</th>
                     <th>Vendor Product Number</th>
                     <th>Vendor Unit</th>
+                    <th className="th-vo-narrow">VO</th>
                     <th>Qty</th>
                     <th></th>
                   </tr>
@@ -1453,7 +1474,7 @@ export default function AutoAllocation() {
                 <tbody>
                   {lineItems.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="empty-table-msg">
+                      <td colSpan={6} className="empty-table-msg">
                         Add products from the list above.
                       </td>
                     </tr>
@@ -1463,6 +1484,9 @@ export default function AutoAllocation() {
                       <td>{item.productName}</td>
                       <td>{item.vendorProductNumber}</td>
                       <td>{item.vendorUnit}</td>
+                      <td className="td-vo-narrow" title="Temporarily activate VO mode">
+                        {item.tempActivateVO ? 'VO' : '—'}
+                      </td>
                       <td>
                         <input
                           type="number"

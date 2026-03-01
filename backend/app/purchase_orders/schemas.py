@@ -24,6 +24,10 @@ class PurchaseOrderLineItem(BaseModel):
     )
     vendor_unit: str = Field(default="", description="Unit of measure for the product")
     qty: int = Field(..., ge=0, description="Quantity to order")
+    temp_activate_vo: bool = Field(
+        default=False,
+        description="If true, activate product for VO ordering at location before PO, then deactivate after.",
+    )
 
 
 class PurchaseOrderSubmitRequest(BaseModel):

@@ -13,10 +13,14 @@ from app.core.config import (
     PG_PORT,
 )
 from app.core.crunchtime_api import ct_headers, get_async_client, service_token
+from app.purchase_orders.location_product_pricing import save_location_product_pricing_sync
 from app.purchase_orders.schemas import (
     PurchaseOrderSubmitRequest,
     PurchaseOrderSubmitResponse,
 )
+
+# Delay between saveLocationProductPricing (activate) and savePurchaseOrders (seconds)
+VO_ACTIVATE_DELAY_SECONDS = 3
 
 router = APIRouter()
 
@@ -272,6 +276,36 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
     order_numbers = []
     now_utc = datetime.now(timezone.utc)
     if submit_immediately:
+        # Activate VO for products with temp_activate_vo (one call per location with such products)
+        locations_to_activate = []
+        for i, loc_code in enumerate(body.location_codes):
+            valid_lines = (
+                per_location_valid_lines[i]
+                if i < len(per_location_valid_lines)
+                else valid_lines_default
+            )
+            vo_products = [
+                (li.product_number or "").strip()
+                for li in valid_lines
+                if getattr(li, "temp_activate_vo", False) and (li.product_number or "").strip()
+            ]
+            if vo_products:
+                locations_to_activate.append((loc_code, vo_products))
+        for loc_code, product_numbers in locations_to_activate:
+            ok, status, msg = await asyncio.to_thread(
+                save_location_product_pricing_sync,
+                loc_code,
+                product_numbers,
+                "Y",
+            )
+            if not ok:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Crunchtime saveLocationProductPricing (activate) failed for location {loc_code}: status={status} {msg[:300]}",
+                )
+        if locations_to_activate:
+            await asyncio.sleep(VO_ACTIVATE_DELAY_SECONDS)
+
         token = service_token("purchaseorder")
         headers = {
             **ct_headers(token_override=token),
@@ -330,6 +364,15 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                     status_code=502,
                     detail=f"Invalid response from Crunchtime for location {loc_code}: {e!s}",
                 )
+
+        # Deactivate VO for products that were temporarily activated (after PO success)
+        for loc_code, product_numbers in locations_to_activate:
+            await asyncio.to_thread(
+                save_location_product_pricing_sync,
+                loc_code,
+                product_numbers,
+                "N",
+            )
 
     # For immediate: trigger time recorded as actual submit time (UTC). For scheduled: use user-selected time (UTC).
     if submit_immediately:
@@ -417,12 +460,13 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                 hdr_id = row[0] if row else None
                 if hdr_id:
                     for li in valid_lines_loc:
+                        temp_vo = "Y" if getattr(li, "temp_activate_vo", False) else "N"
                         cur.execute(
                             """
                             INSERT INTO "CTH"."autoAllocationTransDtl" (
                                 "autoAllocateTransID", "productNumber", "productName",
-                                "vendorUnit", "orderQuantity", "vendorProductNumber"
-                            ) VALUES (%s, %s, %s, %s, %s, %s)
+                                "vendorUnit", "orderQuantity", "vendorProductNumber", "TempActivateVO"
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                             """,
                             (
                                 hdr_id,
@@ -431,6 +475,7 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                                 li.vendor_unit or "",
                                 li.qty,
                                 li.vendor_product_number or "",
+                                temp_vo,
                             ),
                         )
             conn.commit()

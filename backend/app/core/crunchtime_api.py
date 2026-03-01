@@ -8,6 +8,7 @@ from .config import (
     COMPANY_PRODUCT_ENHANCED_TOKEN,
     CRUNCHTIME_CATEGORY_TOKEN_TEST,
     HIERARCHY_TOKEN,
+    LOCATION_PRODUCT_PRICING_TOKEN,
     PASSWORD,
     PURCHASE_ORDERS_TOKEN,
     SITE_NAME,
@@ -60,6 +61,7 @@ def service_token(service_key: str | None) -> str:
             else auth,
             "category": CRUNCHTIME_CATEGORY_TOKEN_TEST or auth,
             "categories": CRUNCHTIME_CATEGORY_TOKEN_TEST or auth,
+            "locationproductpricing": LOCATION_PRODUCT_PRICING_TOKEN or auth,
         }
         return explicit_map.get(key, auth)
 

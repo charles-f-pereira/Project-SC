@@ -58,7 +58,8 @@ CREATE TABLE "CTH"."autoAllocationTransDtl" (
     "productName"           VARCHAR(255) NULL,
     "vendorProductNumber"   VARCHAR(100) NULL,
     "vendorUnit"            VARCHAR(100) NULL,
-    "orderQuantity"         INTEGER NOT NULL
+    "orderQuantity"         INTEGER NOT NULL,
+    "TempActivateVO"        VARCHAR(1) NULL DEFAULT 'N'
 );
 
 -- If the table already exists with vendorCode, run this to drop it:
@@ -67,6 +68,7 @@ CREATE TABLE "CTH"."autoAllocationTransDtl" (
 COMMENT ON TABLE "CTH"."autoAllocationTransDtl" IS 'Auto Allocation transaction detail: product lines per header.';
 COMMENT ON COLUMN "CTH"."autoAllocationTransDtl"."autoAllocateTransID" IS 'FK to autoAllocationTransHdr.';
 COMMENT ON COLUMN "CTH"."autoAllocationTransDtl"."vendorProductNumber" IS 'Vendor product number for Crunchtime savePurchaseOrders replay.';
+COMMENT ON COLUMN "CTH"."autoAllocationTransDtl"."TempActivateVO" IS 'Y=product needs saveLocationProductPricing activate before PO, then deactivate after; N=no.';
 
 CREATE INDEX idx_autoAllocationTransDtl_autoAllocateTransID
     ON "CTH"."autoAllocationTransDtl"("autoAllocateTransID");
