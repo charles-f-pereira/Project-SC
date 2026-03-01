@@ -108,9 +108,32 @@ function buildVendorPricingRows(apiData, includeAlt) {
   return rows;
 }
 
+const ORDER_TIME_TOLERANCE_MINUTES = 10;
+
 /** Current date/time in user's local timezone as YYYY-MM-DDTHH:mm for order datetime min and Now button */
 function getNowLocal() {
   const d = new Date();
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(d);
+  const get = (type) => parts.find((p) => p.type === type)?.value ?? '';
+  const year = get('year');
+  const month = get('month').padStart(2, '0');
+  const day = get('day').padStart(2, '0');
+  const hour = get('hour').padStart(2, '0');
+  const minute = get('minute').padStart(2, '0');
+  return `${year}-${month}-${day}T${hour}:${minute}`;
+}
+
+/** Earliest order date/time we still accept (10 min in the past) for Submit to vendor validation */
+function getMinOrderTimeLocal() {
+  const d = new Date(Date.now() - ORDER_TIME_TOLERANCE_MINUTES * 60 * 1000);
   const formatter = new Intl.DateTimeFormat('en-CA', {
     year: 'numeric',
     month: '2-digit',
@@ -192,6 +215,26 @@ export default function AutoAllocation() {
   const [productsError, setProductsError] = useState(null);
   const [productsSearched, setProductsSearched] = useState(false);
   const [showAltItems, setShowAltItems] = useState(false);
+  // Filterable catalogue from PostgreSQL (max 10 selectable for Show Vendor Products)
+  const [catalogueFilterOptions, setCatalogueFilterOptions] = useState({
+    category_names: [],
+    subcategory_names: [],
+    microcategory_names: [],
+  });
+  const [catalogueFilters, setCatalogueFilters] = useState({
+    productNumber: '',
+    productName: '',
+    categoryName: '',
+    subcategoryName: '',
+    microcategoryName: '',
+  });
+  const [catalogueProducts, setCatalogueProducts] = useState([]);
+  const [catalogueLoading, setCatalogueLoading] = useState(false);
+  const [catalogueSearched, setCatalogueSearched] = useState(false);
+  const [catalogueError, setCatalogueError] = useState(null);
+  const [selectedCatalogueIds, setSelectedCatalogueIds] = useState(new Set());
+  const [pricingBatchLoading, setPricingBatchLoading] = useState(false);
+  const MAX_CATALOGUE_SELECT = 10;
   const [submitLoading, setSubmitLoading] = useState(false);
   const [submitResult, setSubmitResult] = useState(null);
   const [productSelection, setProductSelection] = useState(new Set());
@@ -238,6 +281,27 @@ export default function AutoAllocation() {
   }, []);
 
   useEffect(() => {
+    if (!orderDateTime.trim() || !expectedDeliveryDate.trim()) return;
+    client
+      .get('/api/products/catalogue/filter-options')
+      .then((res) => {
+        const d = res.data || {};
+        setCatalogueFilterOptions({
+          category_names: d.category_names || [],
+          subcategory_names: d.subcategory_names || [],
+          microcategory_names: d.microcategory_names || [],
+        });
+      })
+      .catch(() =>
+        setCatalogueFilterOptions({
+          category_names: [],
+          subcategory_names: [],
+          microcategory_names: [],
+        }),
+      );
+  }, [orderDateTime, expectedDeliveryDate]);
+
+  useEffect(() => {
     if (!filters.vendors?.length || filters.vendors.length !== 1 || vendors.length === 0) {
       setHierarchy([]);
       return;
@@ -272,9 +336,44 @@ export default function AutoAllocation() {
     };
   }, [filters.vendors, vendors]);
 
+  // Location codes from hierarchy when one vendor is selected (for linking vendor -> country/state/market)
+  const hierarchyLocationCodes = useMemo(() => {
+    if (!hierarchy?.length) return null;
+    const set = new Set();
+    hierarchy.forEach((item) => {
+      if (item.levelNumber === 3 || item.levelNumber === '3') {
+        const code = item.locationCode || item.LocationCode || item.code || item.Code || '';
+        if (code) set.add(String(code).trim());
+      }
+    });
+    return set.size ? set : null;
+  }, [hierarchy]);
+
+  // Base set of locations to derive filter options from: selected locations, or hierarchy locations (vendor selected), or all
+  const locationsForFilterOptions = useMemo(() => {
+    const selectedCodes = filters.locations?.length
+      ? new Set(filters.locations.map((c) => String(c).trim()))
+      : null;
+    if (selectedCodes?.size) {
+      return locations.filter((loc) => {
+        const code = loc.code || loc.locationCode || loc.Code || loc.LocationCode || '';
+        return code !== '000000' && selectedCodes.has(String(code).trim());
+      });
+    }
+    if (hierarchyLocationCodes?.size) {
+      return locations.filter((loc) => {
+        const code = loc.code || loc.locationCode || loc.Code || loc.LocationCode || '';
+        return code !== '000000' && hierarchyLocationCodes.has(String(code).trim());
+      });
+    }
+    return locations.filter(
+      (loc) => (loc.code || loc.locationCode || loc.Code || loc.LocationCode || '') !== '000000',
+    );
+  }, [locations, filters.locations, hierarchyLocationCodes]);
+
   const availableMarkets = useMemo(() => {
     const set = new Set();
-    locations.forEach((loc) => {
+    const consider = (loc) => {
       if (Array.isArray(loc.locationDetailDetails) && loc.locationDetailDetails.length > 0) {
         const details = loc.locationDetailDetails[0];
         const m = details?.market ?? details?.Market;
@@ -284,13 +383,31 @@ export default function AutoAllocation() {
         set.add(String(loc.market).trim());
       if (loc.Market !== undefined && loc.Market !== null && loc.Market !== '')
         set.add(String(loc.Market).trim());
-    });
+    };
+    locationsForFilterOptions.forEach(consider);
     return Array.from(set).sort();
-  }, [locations]);
+  }, [locationsForFilterOptions]);
 
   const availableCountries = useMemo(() => {
+    // When state(s) selected (and no location/vendor narrowing): only countries that have those states
+    if (
+      filters.states?.length &&
+      !(filters.locations?.length || (hierarchyLocationCodes && hierarchyLocationCodes.size > 0))
+    ) {
+      const countries = new Set();
+      locations.forEach((loc) => {
+        const code = loc.code || loc.locationCode || loc.Code || loc.LocationCode || '';
+        if (code === '000000') return;
+        const state = extractState(loc);
+        if (state && filters.states.includes(String(state).trim())) {
+          const country = extractCountry(loc);
+          if (country) countries.add(String(country).trim());
+        }
+      });
+      return Array.from(countries).sort();
+    }
     const countries = new Set();
-    locations.forEach((loc) => {
+    locationsForFilterOptions.forEach((loc) => {
       const country = extractCountry(loc);
       if (country) {
         const s = typeof country === 'string' ? country.trim() : String(country).trim();
@@ -298,23 +415,33 @@ export default function AutoAllocation() {
       }
     });
     return Array.from(countries).sort();
-  }, [locations]);
+  }, [locations, locationsForFilterOptions, filters.states, filters.locations, hierarchyLocationCodes]);
 
   const availableStates = useMemo(() => {
     const states = new Set();
-    locations.forEach((loc) => {
+    // When markets selected: only states that have at least one location in those markets (use all locations for this)
+    if (filters.markets?.length) {
+      locations.forEach((loc) => {
+        const code = loc.code || loc.locationCode || loc.Code || loc.LocationCode || '';
+        if (code === '000000') return;
+        const m = extractMarket(loc);
+        if (m && filters.markets.includes(String(m).trim())) {
+          const state = extractState(loc);
+          if (state) states.add(String(state).trim());
+        }
+      });
+      if (states.size > 0) return Array.from(states).sort();
+    }
+    locationsForFilterOptions.forEach((loc) => {
       if (filters.countries?.length) {
         const locCountry = extractCountry(loc);
         if (!locCountry || !filters.countries.includes(String(locCountry).trim())) return;
       }
       const state = extractState(loc);
-      if (state) {
-        const s = typeof state === 'string' ? state.trim() : String(state).trim();
-        if (s.length > 0) states.add(s);
-      }
+      if (state) states.add(String(state).trim());
     });
     return Array.from(states).sort();
-  }, [locations, filters.countries]);
+  }, [locations, locationsForFilterOptions, filters.countries, filters.markets]);
 
   const { availableDCs, dcToLocationCodes, locationCodeToDC } = useMemo(() => {
     const dcs = new Set();
@@ -441,6 +568,106 @@ export default function AutoAllocation() {
     } finally {
       setProductsLoading(false);
     }
+  };
+
+  const fetchCatalogue = async (filterOverride = {}) => {
+    if (!orderDateTime.trim() || !expectedDeliveryDate.trim()) {
+      setCatalogueError('Set Order date & time and Expected delivery date above.');
+      setCatalogueSearched(true);
+      return;
+    }
+    const f = { ...catalogueFilters, ...filterOverride };
+    setCatalogueError(null);
+    setCatalogueLoading(true);
+    setCatalogueSearched(true);
+    try {
+      const params = {};
+      if (f.productNumber.trim()) params.product_number = f.productNumber.trim();
+      if (f.productName.trim()) params.product_name = f.productName.trim();
+      if (f.categoryName.trim()) params.category_name = [f.categoryName.trim()];
+      if (f.subcategoryName.trim()) params.subcategory_name = [f.subcategoryName.trim()];
+      if (f.microcategoryName.trim()) params.microcategory_name = [f.microcategoryName.trim()];
+      const res = await client.get('/api/products/catalogue', { params });
+      const data = res.data?.data ?? [];
+      setCatalogueProducts(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setCatalogueError(
+        err.response?.data?.detail || err.message || 'Failed to load product catalogue.',
+      );
+      setCatalogueProducts([]);
+    } finally {
+      setCatalogueLoading(false);
+    }
+  };
+
+  const fetchPricingForSelected = async () => {
+    const selected = catalogueProducts.filter((p) => selectedCatalogueIds.has(p.id));
+    const productNumbers = selected.map((p) => p.number).filter(Boolean);
+    if (productNumbers.length === 0) {
+      setProductsError('Select up to 10 products from the catalogue above, then click Show Vendor Products.');
+      return;
+    }
+    if (productNumbers.length > MAX_CATALOGUE_SELECT) {
+      setProductsError(`Select at most ${MAX_CATALOGUE_SELECT} products for pricing.`);
+      return;
+    }
+    const vendorCount = filters.vendors?.length ?? 0;
+    const marketCount = filters.markets?.length ?? 0;
+    if (vendorCount !== 1 || marketCount !== 1) {
+      setProductsError('Please select one Vendor and one Market.');
+      return;
+    }
+    const effectiveDate = orderDateToEffectiveDate(orderDateTime);
+    if (!effectiveDate) {
+      setProductsError('Please set Order date & time.');
+      return;
+    }
+    const selectedVendorCode = (filters.vendors && filters.vendors[0]) || '';
+    const selectedVendor = vendors.find(
+      (v) =>
+        (v.code || v.vendorCode || v.Code || v.supplyCode || '').toString().trim() ===
+        selectedVendorCode,
+    );
+    const vendorParam = selectedVendor
+      ? selectedVendor.supplyName ||
+        selectedVendor.name ||
+        selectedVendor.vendorName ||
+        selectedVendor.Name ||
+        selectedVendorCode
+      : selectedVendorCode;
+    setProductsError(null);
+    setPricingBatchLoading(true);
+    setProductsSearched(true);
+    try {
+      const res = await client.post('/api/products/vendor-product-pricing-batch', {
+        effective_date: effectiveDate,
+        market: (filters.markets && filters.markets[0]) || '',
+        vendor: vendorParam,
+        product_numbers: productNumbers,
+      });
+      const data = res.data?.data ?? [];
+      setProducts(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setProductsError(
+        err.response?.data?.detail || err.message || 'Failed to get pricing for selected products.',
+      );
+      setProducts([]);
+    } finally {
+      setPricingBatchLoading(false);
+    }
+  };
+
+  const toggleCatalogueSelection = (id) => {
+    setSelectedCatalogueIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+        return next;
+      }
+      if (next.size >= MAX_CATALOGUE_SELECT) return prev;
+      next.add(id);
+      return next;
+    });
   };
 
   /** Display rows: main + optional secondary (alt) from getAllVendorProductPricing response. */
@@ -681,8 +908,8 @@ export default function AutoAllocation() {
       setSubmitResult({ success: false, message: 'Set the order date and time.' });
       return;
     }
-    const nowLocal = getNowLocal();
-    if (orderDateTime < nowLocal) {
+    const minOrderTime = getMinOrderTimeLocal();
+    if (orderDateTime < minOrderTime) {
       setSubmitResult({ success: false, message: 'Order date & time must be current or future (in your local timezone).' });
       return;
     }
@@ -821,6 +1048,7 @@ export default function AutoAllocation() {
           countries={availableCountries}
           states={availableStates}
           markets={availableMarkets}
+          hierarchyLocationCodes={hierarchyLocationCodes}
           distributionCenters={availableDCs}
           dcToLocationCodes={dcToLocationCodes}
           filters={filters}
@@ -878,8 +1106,9 @@ export default function AutoAllocation() {
             <h2>Products</h2>
             <p className="section-note">
               Set Order date &amp; time and Expected delivery date above, select one Vendor and one
-              Market in the filters, then search by product name or number. Click a row to add to
-              the order. Max {MAX_PRODUCT_LINES} products.
+              Market. Filter the product catalogue (wildcards for number/name; dropdowns for category,
+              subcategory, microcategory). Select up to {MAX_CATALOGUE_SELECT} products and click
+              Show Vendor Products, then Add selected to order lines. Max {MAX_PRODUCT_LINES} order lines.
             </p>
             {!orderDateTime.trim() || !expectedDeliveryDate.trim() ? (
               <p className="products-required-dates-msg">
@@ -887,146 +1116,304 @@ export default function AutoAllocation() {
                 above to search and display products.
               </p>
             ) : null}
-            <div className="product-search-row">
-              <input
-                type="text"
-                placeholder="Product name or number (e.g. P-10003 or Meat - Chicken Maryland)"
-                value={productSearch}
-                onChange={(e) => setProductSearch(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && fetchProducts()}
-                className="product-search-input"
-                disabled={productsLoading || !orderDateTime.trim() || !expectedDeliveryDate.trim()}
-              />
-              <button
-                type="button"
-                onClick={fetchProducts}
-                disabled={
-                  productsLoading || !orderDateTime.trim() || !expectedDeliveryDate.trim()
-                }
-                className="product-search-btn"
-              >
-                {productsLoading ? 'Searching...' : 'Search'}
-              </button>
-              <button
-                type="button"
-                onClick={addSelectedProductsToTable}
-                disabled={
-                  !orderDateTime.trim() ||
-                  !expectedDeliveryDate.trim() ||
-                  productDisplayRows.length === 0 ||
-                  productSelection.size === 0 ||
-                  lineItems.length >= MAX_PRODUCT_LINES
-                }
-                className="product-search-btn"
-                title="Add selected products to order lines"
-              >
-                Add selected
-              </button>
+            <div className="product-catalogue-filters">
+              <div className="product-filter-row">
+                <label className="product-filter-label">
+                  <span>Product number</span>
+                  <input
+                    type="text"
+                    placeholder=""
+                    value={catalogueFilters.productNumber}
+                    onChange={(e) =>
+                      setCatalogueFilters((prev) => ({ ...prev, productNumber: e.target.value }))
+                    }
+                    onKeyDown={(e) => e.key === 'Enter' && fetchCatalogue()}
+                    className="product-filter-input"
+                    disabled={!orderDateTime.trim() || !expectedDeliveryDate.trim()}
+                  />
+                </label>
+                <label className="product-filter-label">
+                  <span>Product name</span>
+                  <input
+                    type="text"
+                    placeholder=""
+                    value={catalogueFilters.productName}
+                    onChange={(e) =>
+                      setCatalogueFilters((prev) => ({ ...prev, productName: e.target.value }))
+                    }
+                    onKeyDown={(e) => e.key === 'Enter' && fetchCatalogue()}
+                    className="product-filter-input"
+                    disabled={!orderDateTime.trim() || !expectedDeliveryDate.trim()}
+                  />
+                </label>
+                <label className="product-filter-label product-filter-dropdown">
+                  <span>Category</span>
+                  <select
+                    value={catalogueFilters.categoryName}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setCatalogueFilters((prev) => ({ ...prev, categoryName: v }));
+                      if (orderDateTime.trim() && expectedDeliveryDate.trim())
+                        fetchCatalogue({ categoryName: v });
+                    }}
+                    className="product-filter-select"
+                    disabled={!orderDateTime.trim() || !expectedDeliveryDate.trim()}
+                  >
+                    <option value="">All</option>
+                    {catalogueFilterOptions.category_names.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="product-filter-label product-filter-dropdown">
+                  <span>Subcategory</span>
+                  <select
+                    value={catalogueFilters.subcategoryName}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setCatalogueFilters((prev) => ({ ...prev, subcategoryName: v }));
+                      if (orderDateTime.trim() && expectedDeliveryDate.trim())
+                        fetchCatalogue({ subcategoryName: v });
+                    }}
+                    className="product-filter-select"
+                    disabled={!orderDateTime.trim() || !expectedDeliveryDate.trim()}
+                  >
+                    <option value="">All</option>
+                    {catalogueFilterOptions.subcategory_names.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="product-filter-label product-filter-dropdown">
+                  <span>Microcategory</span>
+                  <select
+                    value={catalogueFilters.microcategoryName}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setCatalogueFilters((prev) => ({ ...prev, microcategoryName: v }));
+                      if (orderDateTime.trim() && expectedDeliveryDate.trim())
+                        fetchCatalogue({ microcategoryName: v });
+                    }}
+                    className="product-filter-select"
+                    disabled={!orderDateTime.trim() || !expectedDeliveryDate.trim()}
+                  >
+                    <option value="">All</option>
+                    {catalogueFilterOptions.microcategory_names.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={fetchCatalogue}
+                  disabled={
+                    catalogueLoading || !orderDateTime.trim() || !expectedDeliveryDate.trim()
+                  }
+                  className="product-search-btn"
+                >
+                  {catalogueLoading ? 'Loading...' : 'Apply filters'}
+                </button>
+              </div>
             </div>
-            <div className="product-show-alt-row">
-              <label className="product-show-alt-label">
-                <input
-                  type="checkbox"
-                  checked={showAltItems}
-                  onChange={(e) => setShowAltItems(e.target.checked)}
-                />
-                <span>Show Alt items</span>
-              </label>
-              <span className="product-show-alt-hint">
-                When selected, alternate vendor products are listed with *
-              </span>
-            </div>
-            {productsError && <p className="products-error-msg">{productsError}</p>}
+            {catalogueError && <p className="products-error-msg">{catalogueError}</p>}
             <div className="product-catalogue-table-wrap">
-              {(!orderDateTime.trim() || !expectedDeliveryDate.trim()) && (
-                <p className="no-products-msg">
-                  Set Order date &amp; time and Expected delivery date above to search and display
-                  products.
-                </p>
-              )}
-              {orderDateTime.trim() &&
-                expectedDeliveryDate.trim() &&
-                !productsSearched && (
-                  <p className="no-products-msg">
-                    Select one Vendor and one Market, then enter a product name or number and click
-                    Search.
-                  </p>
-                )}
-              {orderDateTime.trim() &&
-                expectedDeliveryDate.trim() &&
-                productsSearched &&
-                !productsLoading &&
-                productDisplayRows.length === 0 &&
-                !productsError && (
-                  <p className="no-products-msg">
-                    No products found. Try a different name or number.
-                  </p>
-                )}
-              {orderDateTime.trim() &&
-                expectedDeliveryDate.trim() &&
-                productDisplayRows.length > 0 && (
+              {orderDateTime.trim() && expectedDeliveryDate.trim() && catalogueSearched && (
                 <>
-                  <table className="product-catalogue-table">
-                    <thead>
-                      <tr>
-                        <th className="th-checkbox">
-                          <label className="select-all-label">
-                            <input
-                              type="checkbox"
-                              checked={
-                                productDisplayRows.length > 0 &&
-                                productSelection.size === productDisplayRows.length
-                              }
-                              onChange={(e) => {
-                                if (e.target.checked) {
-                                  setProductSelection(new Set(productDisplayRows.map((r) => r.id)));
-                                  setProductSelectAll(true);
-                                } else {
-                                  setProductSelection(new Set());
-                                  setProductSelectAll(false);
-                                }
-                              }}
-                              aria-label="Select all products"
-                            />
-                            <span>Select all</span>
-                          </label>
-                        </th>
-                        <th>Market</th>
-                        <th>Product Number</th>
-                        <th>Product Name</th>
-                        <th>Vendor Product Number</th>
-                        <th>Vendor unit</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {productDisplayRows.map((row) => (
-                        <tr key={row.id} className={row.isAlt ? 'product-catalogue-row-alt' : ''}>
-                          <td className="td-checkbox">
-                            <input
-                              type="checkbox"
-                              checked={productSelection.has(row.id)}
-                              onChange={(e) => {
-                                setProductSelection((prev) => {
-                                  const next = new Set(prev);
-                                  if (e.target.checked) next.add(row.id);
-                                  else next.delete(row.id);
-                                  return next;
-                                });
-                              }}
-                              aria-label={`Select ${row.productName}`}
-                            />
-                          </td>
-                          <td>{row.market}</td>
-                          <td>{row.productNumber}</td>
-                          <td>{row.isAlt ? `${row.productName} *` : row.productName}</td>
-                          <td>{row.vendorProductNumber}</td>
-                          <td>{row.vendorUnit}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  {catalogueProducts.length > 0 && (
+                    <>
+                      <p className="catalogue-table-hint">
+                        Select up to {MAX_CATALOGUE_SELECT} products, then click Show Vendor Products.{' '}
+                        {selectedCatalogueIds.size > 0 &&
+                          `${selectedCatalogueIds.size} selected.`}
+                      </p>
+                      <table className="product-catalogue-table catalogue-from-pg">
+                        <thead>
+                          <tr>
+                            <th className="th-checkbox">Select</th>
+                            <th>Product Number</th>
+                            <th>Product Name</th>
+                            <th>Category</th>
+                            <th>Subcategory</th>
+                            <th>Microcategory</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {catalogueProducts.map((row) => (
+                            <tr key={row.id}>
+                              <td className="td-checkbox">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedCatalogueIds.has(row.id)}
+                                  onChange={() => toggleCatalogueSelection(row.id)}
+                                  disabled={
+                                    !selectedCatalogueIds.has(row.id) &&
+                                    selectedCatalogueIds.size >= MAX_CATALOGUE_SELECT
+                                  }
+                                  aria-label={`Select ${row.name || row.number}`}
+                                />
+                              </td>
+                              <td>{row.number ?? '—'}</td>
+                              <td>{row.name ?? '—'}</td>
+                              <td>{row.category_name ?? '—'}</td>
+                              <td>{row.subcategory_name ?? '—'}</td>
+                              <td>{row.microcategory_name ?? '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <button
+                        type="button"
+                        onClick={fetchPricingForSelected}
+                        disabled={
+                          pricingBatchLoading ||
+                          selectedCatalogueIds.size === 0 ||
+                          selectedCatalogueIds.size > MAX_CATALOGUE_SELECT ||
+                          (filters.vendors?.length ?? 0) !== 1 ||
+                          (filters.markets?.length ?? 0) !== 1
+                        }
+                        className="product-search-btn get-pricing-btn"
+                      >
+                        {pricingBatchLoading ? 'Loading...' : 'Show Vendor Products'}
+                      </button>
+                    </>
+                  )}
+                  {!catalogueLoading && catalogueProducts.length === 0 && (
+                    <p className="no-products-msg">
+                      No products match the filters. Adjust filters and click Apply filters.
+                    </p>
+                  )}
                 </>
               )}
+              {orderDateTime.trim() && expectedDeliveryDate.trim() && !catalogueSearched && (
+                <p className="no-products-msg">
+                  Use the filters above and click Apply filters to load the product catalogue.
+                </p>
+              )}
+            </div>
+            <div className="product-pricing-section">
+              <h3 className="product-pricing-heading">Pricing results (from Crunchtime)</h3>
+              <p className="section-note">
+                After clicking Show Vendor Products, select rows below and click Add selected to add to order
+                lines.
+              </p>
+              <div className="product-show-alt-row">
+                <label className="product-show-alt-label">
+                  <input
+                    type="checkbox"
+                    checked={showAltItems}
+                    onChange={(e) => setShowAltItems(e.target.checked)}
+                  />
+                  <span>Show Alt items</span>
+                </label>
+                <span className="product-show-alt-hint">
+                  When selected, alternate vendor products are listed with *
+                </span>
+              </div>
+              {productsError && <p className="products-error-msg">{productsError}</p>}
+              <div className="product-catalogue-table-wrap">
+                {productDisplayRows.length > 0 && (
+                  <>
+                    <table className="product-catalogue-table">
+                      <thead>
+                        <tr>
+                          <th className="th-checkbox">
+                            <label className="select-all-label">
+                              <input
+                                type="checkbox"
+                                checked={
+                                  productDisplayRows.length > 0 &&
+                                  productSelection.size === productDisplayRows.length
+                                }
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setProductSelection(new Set(productDisplayRows.map((r) => r.id)));
+                                    setProductSelectAll(true);
+                                  } else {
+                                    setProductSelection(new Set());
+                                    setProductSelectAll(false);
+                                  }
+                                }}
+                                aria-label="Select all products"
+                              />
+                              <span>Select all</span>
+                            </label>
+                          </th>
+                          <th>Market</th>
+                          <th>Product Number</th>
+                          <th>Product Name</th>
+                          <th>Vendor Product Number</th>
+                          <th>Vendor unit</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {productDisplayRows.map((row) => (
+                          <tr key={row.id} className={row.isAlt ? 'product-catalogue-row-alt' : ''}>
+                            <td className="td-checkbox">
+                              <input
+                                type="checkbox"
+                                checked={productSelection.has(row.id)}
+                                onChange={(e) => {
+                                  setProductSelection((prev) => {
+                                    const next = new Set(prev);
+                                    if (e.target.checked) next.add(row.id);
+                                    else next.delete(row.id);
+                                    return next;
+                                  });
+                                }}
+                                aria-label={`Select ${row.productName}`}
+                              />
+                            </td>
+                            <td>{row.market}</td>
+                            <td>{row.productNumber}</td>
+                            <td>{row.isAlt ? `${row.productName} *` : row.productName}</td>
+                            <td>{row.vendorProductNumber}</td>
+                            <td>{row.vendorUnit}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <button
+                      type="button"
+                      onClick={addSelectedProductsToTable}
+                      disabled={
+                        productDisplayRows.length === 0 ||
+                        productSelection.size === 0 ||
+                        lineItems.length >= MAX_PRODUCT_LINES
+                      }
+                      className="product-search-btn"
+                      title="Add selected products to order lines"
+                    >
+                      Add selected
+                    </button>
+                  </>
+                )}
+                {productsSearched &&
+                  !pricingBatchLoading &&
+                  productDisplayRows.length === 0 &&
+                  !productsError &&
+                  selectedCatalogueIds.size > 0 && (
+                    <p className="no-products-msg">
+                      No pricing returned for the selected products. Try different products or
+                      check vendor/market.
+                    </p>
+                  )}
+                {productsSearched &&
+                  !pricingBatchLoading &&
+                  productDisplayRows.length === 0 &&
+                  !productsError &&
+                  selectedCatalogueIds.size === 0 && (
+                    <p className="no-products-msg">
+                      Select up to {MAX_CATALOGUE_SELECT} products from the catalogue above and
+                      click Show Vendor Products to see vendor pricing here.
+                    </p>
+                  )}
+              </div>
             </div>
           </section>
 

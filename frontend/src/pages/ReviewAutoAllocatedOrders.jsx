@@ -303,12 +303,12 @@ export default function ReviewAutoAllocatedOrders() {
                         '—'
                       )}
                     </td>
-                    <td className="td-checkbox">
+                    <td className="td-checkbox td-confirmed-received">
                       <input
                         type="checkbox"
                         checked={!!tx.confirmReceivedStatus}
                         disabled
-                        title="Future: confirmed received by vendor"
+                        title="Confirmed received by vendor"
                         aria-label="Confirmed received"
                       />
                     </td>

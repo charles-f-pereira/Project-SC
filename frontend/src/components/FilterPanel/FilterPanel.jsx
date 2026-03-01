@@ -89,6 +89,7 @@ export default function FilterPanel({
   schedulesLoading,
   hideDayFilters = false,
   showViewSchedules = true,
+  hierarchyLocationCodes = null,
 }) {
   const [locationSearch, setLocationSearch] = useState('');
   const [vendorSearch, setVendorSearch] = useState('');
@@ -323,8 +324,37 @@ export default function FilterPanel({
     }
   };
 
+  // Location codes that match selected state(s) and/or market(s) (for vendor filtering when hierarchy is available)
+  const locationCodesInSelectedStateMarket = useMemo(() => {
+    if (
+      (!filters.states || filters.states.length === 0) &&
+      (!filters.markets || filters.markets.length === 0)
+    ) {
+      return null;
+    }
+    const set = new Set();
+    locations.forEach((loc) => {
+      const code = loc.code || loc.locationCode || loc.Code || loc.LocationCode || '';
+      if (code === '000000') return;
+      if (filters.states && filters.states.length > 0) {
+        const locState = extractState(loc);
+        if (!locState || !filters.states.includes(String(locState).trim())) return;
+      }
+      if (filters.markets && filters.markets.length > 0) {
+        const locMarket = extractMarket(loc);
+        if (!locMarket || !filters.markets.includes(String(locMarket).trim())) return;
+      }
+      set.add(String(code).trim());
+    });
+    return set.size ? set : null;
+  }, [locations, filters.states, filters.markets]);
+
   const filteredVendors = useMemo(() => {
     return vendors.filter((v) => {
+      const vendorCode =
+        v.code || v.vendorCode || v.Code || v.supplyCode || '';
+      const vendorCodeStr = String(vendorCode).trim();
+
       // Filter by country if countries are selected
       if (filters.countries && filters.countries.length > 0) {
         const vendorCountry = v.countryName || v.country || v.Country || v.CountryName || '';
@@ -332,11 +362,26 @@ export default function FilterPanel({
           const countryStr =
             typeof vendorCountry === 'string' ? vendorCountry.trim() : String(vendorCountry).trim();
           if (!filters.countries.includes(countryStr)) {
-            return false; // Exclude if country doesn't match
+            return false;
           }
         } else {
-          return false; // Exclude if no country found and countries are filtered
+          return false;
         }
+      }
+
+      // Filter by state/market when we have hierarchy for this vendor (one vendor selected): only show if vendor serves at least one location in selected state/market
+      if (
+        locationCodesInSelectedStateMarket &&
+        hierarchyLocationCodes &&
+        hierarchyLocationCodes.size > 0 &&
+        filters.vendors &&
+        filters.vendors.length === 1 &&
+        filters.vendors[0] === vendorCodeStr
+      ) {
+        const hasOverlap = [...hierarchyLocationCodes].some((code) =>
+          locationCodesInSelectedStateMarket.has(code),
+        );
+        if (!hasOverlap) return false;
       }
 
       // Filter by search term
@@ -354,7 +399,16 @@ export default function FilterPanel({
       const code = (v.code || v.vendorCode || v.Code || v.supplyCode || '').toLowerCase();
       return name.includes(searchLower) || code.includes(searchLower);
     });
-  }, [vendors, filters.countries, vendorSearch]);
+  }, [
+    vendors,
+    filters.countries,
+    filters.vendors,
+    filters.states,
+    filters.markets,
+    vendorSearch,
+    hierarchyLocationCodes,
+    locationCodesInSelectedStateMarket,
+  ]);
 
   const handleMultiSelect = (filterKey, value, checked) => {
     const currentValues = filters[filterKey] || [];
@@ -442,9 +496,9 @@ export default function FilterPanel({
     }).length;
   }, [locations, filters.states]);
 
-  // Locations that match current country and state filters only (used to derive available markets)
+  // Locations that match current country and state filters (and selected locations or vendor hierarchy when set)
   const locationsByCountryAndState = useMemo(() => {
-    return locations.filter((loc) => {
+    let base = locations.filter((loc) => {
       const locationCode = loc.code || loc.locationCode || loc.Code || loc.LocationCode || '';
       if (locationCode === '000000') return false;
       if (filters.countries && filters.countries.length > 0) {
@@ -462,7 +516,21 @@ export default function FilterPanel({
       }
       return true;
     });
-  }, [locations, filters.countries, filters.states]);
+    if (filters.locations && filters.locations.length > 0) {
+      const selectedSet = new Set(filters.locations.map((c) => String(c).trim()));
+      base = base.filter((loc) => {
+        const code = loc.code || loc.locationCode || loc.Code || loc.LocationCode || '';
+        return selectedSet.has(String(code).trim());
+      });
+    }
+    if (hierarchyLocationCodes && hierarchyLocationCodes.size > 0) {
+      base = base.filter((loc) => {
+        const code = loc.code || loc.locationCode || loc.Code || loc.LocationCode || '';
+        return hierarchyLocationCodes.has(String(code).trim());
+      });
+    }
+    return base;
+  }, [locations, filters.countries, filters.states, filters.locations, hierarchyLocationCodes]);
 
   // Markets list is dynamic: only markets for locations in the selected country/countries and state(s)
   const availableMarketsFiltered = useMemo(() => {
@@ -484,6 +552,28 @@ export default function FilterPanel({
       onFiltersChange({ ...filters, markets: kept });
     }
   }, [availableMarketsFiltered, filters, onFiltersChange]);
+
+  // When available countries shrink (e.g. state selected), drop any selected country not in the list
+  useEffect(() => {
+    const current = filters.countries || [];
+    if (current.length === 0) return;
+    const allowed = new Set(countries);
+    const kept = current.filter((c) => allowed.has(c));
+    if (kept.length !== current.length) {
+      onFiltersChange({ ...filters, countries: kept });
+    }
+  }, [countries, filters, onFiltersChange]);
+
+  // When available states shrink (e.g. market or location selected), drop any selected state not in the list
+  useEffect(() => {
+    const current = filters.states || [];
+    if (current.length === 0) return;
+    const allowed = new Set(states);
+    const kept = current.filter((s) => allowed.has(s));
+    if (kept.length !== current.length) {
+      onFiltersChange({ ...filters, states: kept });
+    }
+  }, [states, filters, onFiltersChange]);
 
   // Calculate the number of locations filtered by selected markets
   const marketFilteredLocationCount = useMemo(() => {
