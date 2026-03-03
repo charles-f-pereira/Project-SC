@@ -882,7 +882,6 @@ export default function FilterPanel({
                         return { loc, locationCode, displayText, index };
                       })
                       .sort((a, b) => a.displayText.localeCompare(b.displayText))
-                      .slice(0, 50)
                       .map(({ loc, locationCode, displayText, index }) => (
                         <label
                           key={locationCode || `location-${index}`}
@@ -898,9 +897,10 @@ export default function FilterPanel({
                           <span>{displayText}</span>
                         </label>
                       ))}
-                    {filteredLocations.length > 50 && (
+                    {filteredLocations.length > 0 && (
                       <p className="filter-note">
-                        Showing first 50 of {filteredLocations.length} locations
+                        {filteredLocations.length} location
+                        {filteredLocations.length !== 1 ? 's' : ''}
                       </p>
                     )}
                   </div>

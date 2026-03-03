@@ -82,6 +82,17 @@ def _shutdown_scheduler():
     print("[shutdown] APScheduler stopped")
 
 
+# Root: point to docs and health
+@app.get("/")
+def root():
+    return {
+        "service": "Project SC API",
+        "env": CT_ENV,
+        "docs": "/docs",
+        "health": "/api/health",
+    }
+
+
 # Health check
 @app.get("/api/health")
 def health():

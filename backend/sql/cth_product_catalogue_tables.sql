@@ -1,5 +1,6 @@
 -- Project SC: Product catalogue tables (CTH schema)
--- Database: GYG-CT-Helper, Schema: CTH
+-- Schema: CTH
+-- Intended databases: GYG-CT-Helper_TEST (test) or GYG-CT-Helper_PROD (prod).
 -- Source: Crunchtime getAllCompanyProductsEnhanced (companyProductEnhancedHeaderDetails, Concept, Department, UserDefinedCategory details)
 --         and getAllCategories (categoryDetailDetails).
 -- Run after cth_auto_allocation_tables.sql (schema CTH already exists).

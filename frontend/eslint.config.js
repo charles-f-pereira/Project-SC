@@ -7,6 +7,9 @@ import prettierConfig from 'eslint-config-prettier';
 import babelParser from '@babel/eslint-parser';
 
 export default [
+  // Do not lint build output or dependencies
+  { ignores: ['dist/**', 'node_modules/**', '**/node_modules/**'] },
+
   // Base JS rules
   js.configs.recommended,
 

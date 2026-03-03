@@ -6,7 +6,7 @@ from .config import (
     AUTH_TOKEN,
     BASE_URL,
     COMPANY_PRODUCT_ENHANCED_TOKEN,
-    CRUNCHTIME_CATEGORY_TOKEN_TEST,
+    CRUNCHTIME_CATEGORY_TOKEN,
     HIERARCHY_TOKEN,
     LOCATION_PRODUCT_PRICING_TOKEN,
     PASSWORD,
@@ -59,8 +59,8 @@ def service_token(service_key: str | None) -> str:
             "purchaseorders": _require(PURCHASE_ORDERS_TOKEN, "PURCHASE_ORDERS_TOKEN")
             if PURCHASE_ORDERS_TOKEN
             else auth,
-            "category": CRUNCHTIME_CATEGORY_TOKEN_TEST or auth,
-            "categories": CRUNCHTIME_CATEGORY_TOKEN_TEST or auth,
+            "category": CRUNCHTIME_CATEGORY_TOKEN or auth,
+            "categories": CRUNCHTIME_CATEGORY_TOKEN or auth,
             "locationproductpricing": LOCATION_PRODUCT_PRICING_TOKEN or auth,
         }
         return explicit_map.get(key, auth)

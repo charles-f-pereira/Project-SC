@@ -1,6 +1,7 @@
 -- Project SC: Auto Allocation transaction tables
--- Database: GYG-CT-Helper, Schema: CTH
+-- Schema: CTH
 -- Run this script against the PostgreSQL database to create the schema and tables.
+-- Intended databases: GYG-CT-Helper_TEST (test) or GYG-CT-Helper_PROD (prod).
 
 CREATE SCHEMA IF NOT EXISTS "CTH";
 

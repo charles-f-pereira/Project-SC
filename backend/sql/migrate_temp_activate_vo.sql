@@ -1,5 +1,5 @@
 -- Migration: Temp activate VO mode for product (saveLocationProductPricing before/after savePurchaseOrders)
--- Run against GYG-CT-Helper, schema CTH.
+-- Run against database GYG-CT-Helper_TEST (test) or GYG-CT-Helper_PROD (prod), schema CTH.
 -- Adds: TempActivateVO on autoAllocationTransDtl.
 
 ALTER TABLE "CTH"."autoAllocationTransDtl"

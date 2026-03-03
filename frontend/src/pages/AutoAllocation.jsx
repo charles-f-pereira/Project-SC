@@ -261,19 +261,48 @@ export default function AutoAllocation() {
       try {
         setLoading(true);
         setError(null);
+        const base =
+          client.defaults.baseURL || (typeof window !== 'undefined' ? window.location.origin : '');
+        const apiHint = base.includes('8001')
+          ? 'Backend should be running on port 8001 (run start_prod.bat).'
+          : 'Backend should be running on port 8000 (run start_test.bat).';
+        const networkErrorMsg = `Cannot reach the API at ${base || 'current host (proxy to 8000)'}. ${apiHint}`;
         const [locationsRes, vendorsRes] = await Promise.all([
-          client
-            .get('/api/locations', { params: { activeFlag: true } })
-            .catch(() => ({ data: { data: [] } })),
-          client
-            .get('/api/vendors', { params: { activeFlag: true } })
-            .catch(() => ({ data: { data: [] } })),
+          client.get('/api/locations', { params: { activeFlag: true } }).catch((err) => {
+            console.error('Locations request failed:', err);
+            const msg =
+              err?.message === 'Network Error'
+                ? networkErrorMsg
+                : err?.message || 'Failed to load locations.';
+            setError(msg);
+            return { data: { data: [] } };
+          }),
+          client.get('/api/vendors', { params: { activeFlag: true } }).catch((err) => {
+            console.error('Vendors request failed:', err);
+            const msg =
+              err?.message === 'Network Error'
+                ? networkErrorMsg
+                : err?.message || 'Failed to load vendors.';
+            setError((prev) => prev || msg);
+            return { data: { data: [] } };
+          }),
         ]);
-        setLocations(locationsRes.data.data || []);
-        setVendors(vendorsRes.data.data || []);
+        const locList = locationsRes?.data?.data;
+        const venList = vendorsRes?.data?.data;
+        setLocations(Array.isArray(locList) ? locList : []);
+        setVendors(Array.isArray(venList) ? venList : []);
       } catch (err) {
         console.error('Error fetching data:', err);
-        setError(err.message || 'Failed to load data');
+        const base =
+          client.defaults.baseURL || (typeof window !== 'undefined' ? window.location.origin : '');
+        const apiHint = base.includes('8001')
+          ? 'Run start_prod.bat (port 8001).'
+          : 'Run start_test.bat (port 8000).';
+        setError(
+          err?.message === 'Network Error'
+            ? `Cannot reach the API. ${apiHint}`
+            : err?.message || 'Failed to load data',
+        );
       } finally {
         setLoading(false);
       }

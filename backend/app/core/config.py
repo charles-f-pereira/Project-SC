@@ -6,36 +6,47 @@ import truststore
 
 truststore.inject_into_ssl()
 
-# Load environment from a local .env if present
+# Load environment: production loads .env.production first, then .env; else .env only
+if os.getenv("APP_ENV") == "production":
+    load_dotenv(".env.production")
 load_dotenv()
 
-# Environment selection (test|prod)
-CT_ENV = os.getenv("CT_ENV", "test").lower()
+# Environment selection (test|prod). Do not set CT_ENV to the URL – use "test" or "prod".
+# Base URLs: test = webservices-test.net-chef.com, prod = webservices.net-chef.com
+CT_ENV = os.getenv("CT_ENV", "test").lower().strip()
+if CT_ENV not in ("test", "prod"):
+    CT_ENV = (
+        "prod" if "prod" in CT_ENV or (os.getenv("APP_ENV") == "production") else "test"
+    )
+_CT_SUFFIX = "PROD" if CT_ENV == "prod" else "TEST"
+
 BASE_URL = (
-    "https://webservices-test.net-chef.com"
+    "https://webservices-test.net-chef.com"  # Crunchtime TEST
     if CT_ENV == "test"
-    else "https://webservices.net-chef.com"
+    else "https://webservices.net-chef.com"  # Crunchtime PROD
 )
 
-# Required credentials (kept identical to existing env names)
-AUTH_TOKEN = os.getenv("CRUNCHTIME_LOCATION_TOKEN_TEST")
-SITE_NAME = os.getenv("sitename")
-USER_ID = os.getenv("userid")
-PASSWORD = os.getenv("password")
+# Required credentials (per-env: sitename_TEST/userid_TEST/password_TEST or _PROD)
+SITE_NAME = os.getenv(f"sitename_{_CT_SUFFIX}") or os.getenv("sitename")
+USER_ID = os.getenv(f"userid_{_CT_SUFFIX}") or os.getenv("userid")
+PASSWORD = os.getenv(f"password_{_CT_SUFFIX}") or os.getenv("password")
 
-# Additional Crunchtime tokens
-HIERARCHY_TOKEN = os.getenv("CRUNCHTIME_HIERARCHY_TOKEN_TEST")
-VENDOR_TOKEN = os.getenv("CRUNCHTIME_VENDOR_TOKEN_TEST")
-VENDOR_LOCATION_TOKEN = os.getenv("CRUNCHTIME_VENDOR_LOCATION_TOKEN_TEST")
+# Crunchtime tokens (per-env: CRUNCHTIME_*_TEST or CRUNCHTIME_*_PROD)
+AUTH_TOKEN = os.getenv(f"CRUNCHTIME_LOCATION_TOKEN_{_CT_SUFFIX}")
+HIERARCHY_TOKEN = os.getenv(f"CRUNCHTIME_HIERARCHY_TOKEN_{_CT_SUFFIX}")
+VENDOR_TOKEN = os.getenv(f"CRUNCHTIME_VENDOR_TOKEN_{_CT_SUFFIX}")
+VENDOR_LOCATION_TOKEN = os.getenv(f"CRUNCHTIME_VENDOR_LOCATION_TOKEN_{_CT_SUFFIX}")
 COMPANY_PRODUCT_ENHANCED_TOKEN = os.getenv(
-    "CRUNCHTIME_COMPANY_PRODUCT_ENHANCED_TOKEN_TEST"
+    f"CRUNCHTIME_COMPANY_PRODUCT_ENHANCED_TOKEN_{_CT_SUFFIX}"
 )
-VENDOR_PRODUCT_PRICING_TOKEN = os.getenv("CRUNCHTIME_VENDOR_PRODUCT_PRICING_TOKEN_TEST")
-PURCHASE_ORDERS_TOKEN = os.getenv("CRUNCHTIME_PURCHASE_ORDERS_TOKEN_TEST")
+VENDOR_PRODUCT_PRICING_TOKEN = os.getenv(
+    f"CRUNCHTIME_VENDOR_PRODUCT_PRICING_TOKEN_{_CT_SUFFIX}"
+)
+PURCHASE_ORDERS_TOKEN = os.getenv(f"CRUNCHTIME_PURCHASE_ORDERS_TOKEN_{_CT_SUFFIX}")
 LOCATION_PRODUCT_PRICING_TOKEN = os.getenv(
-    "CRUNCHTIME_LOCATION_PRODUCT_PRICING_TOKEN_TEST"
+    f"CRUNCHTIME_LOCATION_PRODUCT_PRICING_TOKEN_{_CT_SUFFIX}"
 )
-CRUNCHTIME_CATEGORY_TOKEN_TEST = os.getenv("CRUNCHTIME_CATEGORY_TOKEN_TEST")
+CRUNCHTIME_CATEGORY_TOKEN = os.getenv(f"CRUNCHTIME_CATEGORY_TOKEN_{_CT_SUFFIX}")
 
 # Public Holidays API
 API_NINJAS_KEY = os.getenv("API_NINJAS_KEY")
@@ -50,12 +61,14 @@ PG_DATABASE = os.getenv("pgDatabase", "GYG-CT-Helper")
 _missing = [
     k
     for k, v in {
-        "CRUNCHTIME_LOCATION_TOKEN_TEST": AUTH_TOKEN,
-        "sitename": SITE_NAME,
-        "userid": USER_ID,
-        "password": PASSWORD,
+        "AUTH_TOKEN (CRUNCHTIME_LOCATION_TOKEN_*)": AUTH_TOKEN,
+        "SITE_NAME (sitename_*)": SITE_NAME,
+        "USER_ID (userid_*)": USER_ID,
+        "PASSWORD (password_*)": PASSWORD,
     }.items()
     if not v
 ]
 if _missing:
-    raise RuntimeError(f"Missing required .env values: {', '.join(_missing)}")
+    raise RuntimeError(
+        f"Missing required .env values for {CT_ENV}: {', '.join(_missing)}"
+    )
