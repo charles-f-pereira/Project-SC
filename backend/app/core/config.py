@@ -52,11 +52,12 @@ CRUNCHTIME_CATEGORY_TOKEN = os.getenv(f"CRUNCHTIME_CATEGORY_TOKEN_{_CT_SUFFIX}")
 API_NINJAS_KEY = os.getenv("API_NINJAS_KEY")
 
 # PostgreSQL (Auto Allocation transaction store, database GYG-CT-Helper)
-PG_NAME = os.getenv("pgName")
-PG_PASSWORD = os.getenv("pgPassword")
-PG_HOST = os.getenv("pgHost", "localhost")
-PG_PORT = int(os.getenv("pgPort", "5432"))
-PG_DATABASE = os.getenv("pgDatabase", "GYG-CT-Helper")
+# Accept pgName or PG_NAME etc. so either .env style works
+PG_NAME = os.getenv("pgName") or os.getenv("PG_NAME")
+PG_PASSWORD = os.getenv("pgPassword") or os.getenv("PG_PASSWORD")
+PG_HOST = os.getenv("pgHost") or os.getenv("PG_HOST") or "localhost"
+PG_PORT = int(os.getenv("pgPort") or os.getenv("PG_PORT") or "5432")
+PG_DATABASE = os.getenv("pgDatabase") or os.getenv("PG_DATABASE") or "GYG-CT-Helper"
 
 _missing = [
     k

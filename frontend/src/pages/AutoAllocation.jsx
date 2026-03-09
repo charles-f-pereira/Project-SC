@@ -1,7 +1,11 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import FilterPanel from '../components/FilterPanel/FilterPanel.jsx';
 import client from '../api/client.js';
+import {
+  getNextOrderDateFromSchedule,
+  getNextDeliveryDateFromSchedule,
+} from '../utils/scheduleDateUtils.js';
 import './AutoAllocation.css';
 
 function extractCountry(loc) {
@@ -110,7 +114,57 @@ function buildVendorPricingRows(apiData, includeAlt) {
 
 const ORDER_TIME_TOLERANCE_MINUTES = 10;
 
-/** Current date/time in user's local timezone as YYYY-MM-DDTHH:mm for order datetime min and Now button */
+/** Allowed minute values for order date/time (15-minute steps) */
+const ORDER_TIME_MINUTE_STEP = 15;
+
+/** Default order date/time: today at 10:00 local (YYYY-MM-DDTHH:mm) */
+function getDefaultOrderDateTime() {
+  const today = getTodayLocal();
+  if (!today) return '';
+  return `${today}T10:00`;
+}
+
+/** Build list of time options for order time picker: :00, :15, :30, :45 for each hour. */
+function getOrderTimeOptions() {
+  const options = [];
+  for (let h = 0; h < 24; h++) {
+    for (let m = 0; m < 60; m += ORDER_TIME_MINUTE_STEP) {
+      options.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+    }
+  }
+  return options;
+}
+
+const ORDER_TIME_OPTIONS = getOrderTimeOptions();
+
+/** Time part (HH:mm) from orderDateTime. */
+function getOrderTimeSelectValue(orderDateTime) {
+  const t = (orderDateTime || '').trim().slice(11, 16);
+  if (!t || t.length !== 5) return '10:00';
+  return t;
+}
+
+/** Time options for the select; add current value if not on 15-min step (e.g. after Now). */
+function getOrderTimeOptionsWithCurrent(orderDateTime) {
+  const current = getOrderTimeSelectValue(orderDateTime);
+  if (ORDER_TIME_OPTIONS.includes(current)) return ORDER_TIME_OPTIONS;
+  return [current, ...ORDER_TIME_OPTIONS];
+}
+
+/** Today's date in user's local timezone as YYYY-MM-DD for date inputs and validation */
+function getTodayLocal() {
+  const d = new Date();
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = formatter.formatToParts(d);
+  const get = (type) => parts.find((p) => p.type === type)?.value ?? '';
+  return `${get('year')}-${get('month').padStart(2, '0')}-${get('day').padStart(2, '0')}`;
+}
+
+/** Current date/time in user's local timezone as YYYY-MM-DDTHH:mm (exact, no rounding) for Now button and min */
 function getNowLocal() {
   const d = new Date();
   const formatter = new Intl.DateTimeFormat('en-CA', {
@@ -173,19 +227,6 @@ function getMaxOrderDateTimeLocal() {
   return `${year}-${month}-${day}T${hour}:${minute}`;
 }
 
-/** Today's date in user's local timezone as YYYY-MM-DD for date inputs and validation */
-function getTodayLocal() {
-  const d = new Date();
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
-  const parts = formatter.formatToParts(d);
-  const get = (type) => parts.find((p) => p.type === type)?.value ?? '';
-  return `${get('year')}-${get('month').padStart(2, '0')}-${get('day').padStart(2, '0')}`;
-}
-
 /** Date part of order date/time (YYYY-MM-DD) for min expected delivery */
 function getOrderDatePart(orderDateTime) {
   const s = (orderDateTime || '').trim().slice(0, 10);
@@ -207,7 +248,7 @@ export default function AutoAllocation() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
-  const [orderDateTime, setOrderDateTime] = useState('');
+  const [orderDateTime, setOrderDateTime] = useState(getDefaultOrderDateTime);
   const [lineItems, setLineItems] = useState([]);
   const [productSearch, setProductSearch] = useState('');
   const [products, setProducts] = useState([]);
@@ -244,6 +285,15 @@ export default function AutoAllocation() {
   const [reviewApproved, setReviewApproved] = useState(new Set());
   const [locationExpectedDelivery, setLocationExpectedDelivery] = useState({});
   const [reviewQty, setReviewQty] = useState({});
+  const [useLocationNextOrderDate, setUseLocationNextOrderDate] = useState(false);
+  const [useLocationNextDeliveryDate, setUseLocationNextDeliveryDate] = useState(false);
+  const [locationOrderDates, setLocationOrderDates] = useState({});
+  const [locationSchedulesByLocation, setLocationSchedulesByLocation] = useState({});
+  const [locationScheduleLoading, setLocationScheduleLoading] = useState(false);
+  const [locationScheduleError, setLocationScheduleError] = useState(null);
+  const [productsSectionExpanded, setProductsSectionExpanded] = useState(true);
+  const [orderLinesSectionExpanded, setOrderLinesSectionExpanded] = useState(true);
+  const reviewRowsCountRef = useRef(0);
 
   const [filters, setFilters] = useState({
     markets: [],
@@ -365,6 +415,107 @@ export default function AutoAllocation() {
       cancelled = true;
     };
   }, [filters.vendors, vendors]);
+
+  const selectedVendorCode = useMemo(() => {
+    if (!filters.vendors?.length || filters.vendors.length !== 1) return null;
+    return String(filters.vendors[0] || '').trim();
+  }, [filters.vendors]);
+
+  useEffect(() => {
+    const useScheduleOptions = useLocationNextOrderDate || useLocationNextDeliveryDate;
+    if (
+      !useScheduleOptions ||
+      !selectedVendorCode ||
+      !filters.locations?.length ||
+      !orderDateTime.trim()
+    ) {
+      setLocationOrderDates({});
+      setLocationSchedulesByLocation({});
+      setLocationScheduleError(null);
+      setLocationScheduleLoading(false);
+      return;
+    }
+    const orderDatePart = getOrderDatePart(orderDateTime) || getTodayLocal();
+    let cancelled = false;
+    setLocationScheduleLoading(true);
+    setLocationScheduleError(null);
+    const locationCodes = [...(filters.locations || [])]
+      .map((c) => String(c).trim())
+      .filter(Boolean);
+    Promise.all(
+      locationCodes.map((locationCode) =>
+        client
+          .get('/api/schedules/vendor-locations', { params: { locationCode } })
+          .then((res) => ({ locationCode, data: res.data?.data || [] }))
+          .catch((err) => ({ locationCode, error: err })),
+      ),
+    ).then((results) => {
+      if (cancelled) return;
+      const orderDates = {};
+      const schedulesByLoc = {};
+      let errMsg = null;
+      for (const { locationCode, data, error } of results) {
+        if (error) {
+          errMsg = error?.response?.data?.detail || error?.message || 'Failed to fetch schedule';
+          orderDates[locationCode] = orderDatePart;
+          continue;
+        }
+        const rowForVendor = Array.isArray(data)
+          ? data.find(
+              (r) =>
+                String(r.vendorCode || r.VendorCode || r.vendor || '').trim() ===
+                selectedVendorCode,
+            )
+          : null;
+        const detailList =
+          rowForVendor?.vendorLocationScheduleDetail ?? rowForVendor?.VendorLocationScheduleDetail;
+        const arr = Array.isArray(detailList) ? detailList : detailList ? [detailList] : [];
+        if (rowForVendor) schedulesByLoc[locationCode] = arr;
+        const nextOrder = useLocationNextOrderDate
+          ? getNextOrderDateFromSchedule(arr, orderDatePart, 7)
+          : null;
+        orderDates[locationCode] = nextOrder || orderDatePart;
+      }
+      setLocationOrderDates(orderDates);
+      setLocationSchedulesByLocation(schedulesByLoc);
+      setLocationScheduleError(errMsg);
+      setLocationScheduleLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    useLocationNextOrderDate,
+    useLocationNextDeliveryDate,
+    selectedVendorCode,
+    filters.locations,
+    orderDateTime,
+  ]);
+
+  const {
+    dates: locationDeliveryDatesFromSchedule,
+    scheduleNotDefined: locationDeliveryScheduleNotDefined,
+  } = useMemo(() => {
+    const dates = {};
+    const scheduleNotDefined = {};
+    if (!useLocationNextDeliveryDate) return { dates, scheduleNotDefined };
+    const orderDatePart = getOrderDatePart(orderDateTime) || getTodayLocal();
+    Object.keys(locationOrderDates).forEach((locCode) => {
+      const orderDate = locationOrderDates[locCode] || orderDatePart;
+      const schedule = locationSchedulesByLocation[locCode];
+      const arr = Array.isArray(schedule) ? schedule : schedule ? [schedule] : [];
+      const delivery = getNextDeliveryDateFromSchedule(arr, orderDate, 8);
+      if (!delivery) scheduleNotDefined[locCode] = true;
+      dates[locCode] = delivery || expectedDeliveryDate || orderDatePart;
+    });
+    return { dates, scheduleNotDefined };
+  }, [
+    useLocationNextDeliveryDate,
+    locationOrderDates,
+    locationSchedulesByLocation,
+    orderDateTime,
+    expectedDeliveryDate,
+  ]);
 
   // Location codes from hierarchy when one vendor is selected (for linking vendor -> country/state/market)
   const hierarchyLocationCodes = useMemo(() => {
@@ -718,6 +869,22 @@ export default function AutoAllocation() {
   const lineItemKey = (item) =>
     `${String(item.vendorProductNumber ?? '').trim()}|${String(item.vendorUnit ?? '').trim()}`;
 
+  /** When a product is deselected in Pricing Results, remove it from selection, order lines, and VO selection. */
+  const flushProductOnDeselect = (row) => {
+    const key = `${String(row.vendorProductNumber ?? '').trim()}|${String(row.vendorUnit ?? '').trim()}`;
+    setProductSelection((prev) => {
+      const next = new Set(prev);
+      next.delete(row.id);
+      return next;
+    });
+    setLineItems((prev) => prev.filter((li) => lineItemKey(li) !== key));
+    setTempActivateVOSelection((prev) => {
+      const next = new Set(prev);
+      next.delete(row.id);
+      return next;
+    });
+  };
+
   const addProductToTable = (product) => {
     if (lineItems.length >= MAX_PRODUCT_LINES) return;
     const vpn = String((product.vendorProductNumber || product.vendorProductNo) ?? '').trim();
@@ -803,6 +970,8 @@ export default function AutoAllocation() {
     });
   }, [filters.locations, locations, locationCodeToDC]);
 
+  const orderDatePartForReview = getOrderDatePart(orderDateTime) || getTodayLocal();
+
   const reviewRows = useMemo(() => {
     const locationCodes = filters.locations || [];
     const validLines = lineItems.filter((li) => (li.qty || 0) > 0);
@@ -829,8 +998,25 @@ export default function AutoAllocation() {
           }
         })()
       : '';
+    const selectedOrderDate = orderDatePartForReview;
     const rows = [];
-    locationDetailsForSubmit.forEach((locDetail, idx) => {
+    locationDetailsForSubmit.forEach((locDetail) => {
+      const effectiveOrderDate = useLocationNextOrderDate
+        ? locationOrderDates[locDetail.locationCode] || selectedOrderDate
+        : selectedOrderDate;
+      let orderDay = '';
+      let daysFromSelected = 0;
+      try {
+        const d = new Date(effectiveOrderDate + 'T12:00:00');
+        orderDay = d.toLocaleDateString('en-US', { weekday: 'short' });
+        const sel = new Date(selectedOrderDate + 'T12:00:00');
+        daysFromSelected = Math.round((d - sel) / (24 * 60 * 60 * 1000));
+      } catch {
+        orderDay = '';
+        daysFromSelected = 0;
+      }
+      const scheduleNotDefined =
+        useLocationNextDeliveryDate && !!locationDeliveryScheduleNotDefined[locDetail.locationCode];
       validLines.forEach((li) => {
         rows.push({
           rowKey: `${locDetail.locationCode}|${li.id}`,
@@ -840,6 +1026,10 @@ export default function AutoAllocation() {
           vendor: vendorName || '—',
           distributionCenter: locDetail.distributionCenter || '—',
           locationName: locDetail.locationName || locDetail.locationCode || '—',
+          orderDate: effectiveOrderDate,
+          orderDay,
+          daysFromSelectedOrderDate: daysFromSelected,
+          scheduleNotDefined,
           expectedDeliveryDate: expectedDeliveryDate,
           expectedDeliveryDOW: expectedDOW,
           lineItem: li,
@@ -861,7 +1051,20 @@ export default function AutoAllocation() {
     expectedDeliveryDate,
     locationDetailsForSubmit,
     vendors,
+    useLocationNextOrderDate,
+    useLocationNextDeliveryDate,
+    locationOrderDates,
+    locationDeliveryScheduleNotDefined,
+    orderDatePartForReview,
   ]);
+
+  useEffect(() => {
+    if (reviewRows.length > 0 && reviewRowsCountRef.current === 0) {
+      setProductsSectionExpanded(false);
+      setOrderLinesSectionExpanded(false);
+    }
+    reviewRowsCountRef.current = reviewRows.length;
+  }, [reviewRows.length]);
 
   const toggleReviewApproved = (rowKey) => {
     setReviewApproved((prev) => {
@@ -877,8 +1080,12 @@ export default function AutoAllocation() {
     else setReviewApproved(new Set());
   };
 
-  const getReviewExpectedDate = (row) =>
-    (locationExpectedDelivery[row.locationCode] ?? expectedDeliveryDate) || '';
+  const getReviewExpectedDate = (row) => {
+    if (useLocationNextDeliveryDate && locationDeliveryDatesFromSchedule[row.locationCode]) {
+      return locationDeliveryDatesFromSchedule[row.locationCode];
+    }
+    return (locationExpectedDelivery[row.locationCode] ?? expectedDeliveryDate) || '';
+  };
 
   const getReviewExpectedDOW = (dateStr) => {
     if (!dateStr) return '';
@@ -997,9 +1204,12 @@ export default function AutoAllocation() {
         null
       : vendorCodeStr || null;
 
-    const expected_delivery_dates = locationCodesOrdered.map(
-      (locCode) => locationExpectedDelivery[locCode] ?? expectedDeliveryDate,
-    );
+    const expected_delivery_dates = locationCodesOrdered.map((locCode) => {
+      if (useLocationNextDeliveryDate && locationDeliveryDatesFromSchedule[locCode]) {
+        return locationDeliveryDatesFromSchedule[locCode];
+      }
+      return locationExpectedDelivery[locCode] ?? expectedDeliveryDate;
+    });
     for (let i = 0; i < expected_delivery_dates.length; i++) {
       const ed = expected_delivery_dates[i];
       if (!ed || ed < minDeliveryDate) {
@@ -1034,10 +1244,23 @@ export default function AutoAllocation() {
       return;
     }
     const fallbackLineItems = location_line_items.find((arr) => arr.length > 0) || [];
-    // Send user's local timezone so backend validates order date/time in local time (stored as UTC)
+    const orderDateTimeNormalized =
+      orderDateTime.length <= 16 ? `${orderDateTime}:00` : orderDateTime;
+    const timePart =
+      orderDateTimeNormalized.includes('T') && orderDateTimeNormalized.length >= 16
+        ? orderDateTimeNormalized.slice(11, 19).replace(/:00$/, '') ||
+          orderDateTimeNormalized.slice(11, 16)
+        : '00:00';
+    const order_date_times = useLocationNextOrderDate
+      ? locationCodesOrdered.map((locCode) => {
+          const orderDate =
+            locationOrderDates[locCode] || getOrderDatePart(orderDateTime) || getTodayLocal();
+          return `${orderDate}T${timePart}`;
+        })
+      : undefined;
     const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     const payload = {
-      order_date_time: orderDateTime.length <= 16 ? `${orderDateTime}:00` : orderDateTime,
+      order_date_time: orderDateTimeNormalized,
       order_date_time_zone: userTimeZone,
       expected_delivery_date: expectedDeliveryDate,
       expected_delivery_dates,
@@ -1047,6 +1270,7 @@ export default function AutoAllocation() {
       vendor_name: vendorName,
       line_items: fallbackLineItems,
       location_line_items,
+      ...(order_date_times !== undefined && { order_date_times }),
     };
 
     try {
@@ -1110,13 +1334,33 @@ export default function AutoAllocation() {
               </p>
               <div className="order-datetime-row">
                 <input
-                  type="datetime-local"
-                  value={orderDateTime}
-                  onChange={(e) => setOrderDateTime(e.target.value)}
-                  min={getNowLocal()}
-                  max={getMaxOrderDateTimeLocal()}
-                  className="order-datetime-input"
+                  type="date"
+                  value={(orderDateTime || '').trim().slice(0, 10) || getTodayLocal()}
+                  onChange={(e) => {
+                    const date = e.target.value;
+                    const time = getOrderTimeSelectValue(orderDateTime);
+                    setOrderDateTime(`${date}T${time}`);
+                  }}
+                  min={getTodayLocal()}
+                  max={getMaxOrderDateTimeLocal().slice(0, 10)}
+                  className="order-datetime-input order-datetime-date"
                 />
+                <select
+                  value={getOrderTimeSelectValue(orderDateTime)}
+                  onChange={(e) => {
+                    const date = (orderDateTime || '').trim().slice(0, 10) || getTodayLocal();
+                    setOrderDateTime(`${date}T${e.target.value}`);
+                  }}
+                  className="order-datetime-input order-datetime-time-select"
+                  title="Time options: :00, :15, :30, :45"
+                  aria-label="Order time (15-minute steps)"
+                >
+                  {getOrderTimeOptionsWithCurrent(orderDateTime).map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   onClick={() => setOrderDateTime(getNowLocal())}
@@ -1129,6 +1373,29 @@ export default function AutoAllocation() {
                 Note: Date/Time is in your local time zone, remember to take this into consideration
                 when placing orders for other states/countries.
               </p>
+              <label className="schedule-option-checkbox">
+                <input
+                  type="checkbox"
+                  checked={useLocationNextOrderDate}
+                  onChange={(e) => setUseLocationNextOrderDate(e.target.checked)}
+                  disabled={filters.vendors?.length !== 1}
+                  aria-describedby="order-schedule-hint"
+                />
+                <span>Use each location&apos;s next order date/time</span>
+              </label>
+              {filters.vendors?.length !== 1 && (
+                <p id="order-schedule-hint" className="schedule-option-hint">
+                  Select exactly one vendor to use each location&apos;s schedule.
+                </p>
+              )}
+              {(useLocationNextOrderDate || useLocationNextDeliveryDate) &&
+                locationScheduleLoading && (
+                  <p className="schedule-loading-msg">Loading schedules…</p>
+                )}
+              {(useLocationNextOrderDate || useLocationNextDeliveryDate) &&
+                locationScheduleError && (
+                  <p className="schedule-error-msg">{locationScheduleError}</p>
+                )}
             </section>
             <section className="auto-allocation-section expected-delivery-section date-tile">
               <h2>Expected delivery date</h2>
@@ -1143,417 +1410,476 @@ export default function AutoAllocation() {
                 min={getMinExpectedDeliveryDate(orderDateTime)}
                 className="expected-delivery-date-input"
               />
+              <label className="schedule-option-checkbox">
+                <input
+                  type="checkbox"
+                  checked={useLocationNextDeliveryDate}
+                  onChange={(e) => setUseLocationNextDeliveryDate(e.target.checked)}
+                  disabled={filters.vendors?.length !== 1}
+                  aria-describedby="delivery-schedule-hint"
+                />
+                <span>Use each location&apos;s next delivery date/time</span>
+              </label>
+              {filters.vendors?.length !== 1 && (
+                <p id="delivery-schedule-hint" className="schedule-option-hint">
+                  Select exactly one vendor to use each location&apos;s schedule.
+                </p>
+              )}
             </section>
           </div>
 
           <section className="auto-allocation-section products-section">
-            <h2>Products</h2>
-            <p className="section-note">
-              Set Order date &amp; time and Expected delivery date above, select one Vendor and one
-              Market. Filter the product catalogue (wildcards for number/name; dropdowns for
-              category, subcategory, microcategory). Select up to {MAX_CATALOGUE_SELECT} products
-              and click Show Vendor Products, then Add selected to order lines. Max{' '}
-              {MAX_PRODUCT_LINES} order lines.
-            </p>
-            {!orderDateTime.trim() || !expectedDeliveryDate.trim() ? (
-              <p className="products-required-dates-msg">
-                Set <strong>Order date &amp; time</strong> and{' '}
-                <strong>Expected delivery date</strong> above to search and display products.
-              </p>
-            ) : null}
-            <div className="product-catalogue-filters">
-              <div className="product-filter-row">
-                <label className="product-filter-label">
-                  <span>Product number</span>
-                  <input
-                    type="text"
-                    placeholder=""
-                    value={catalogueFilters.productNumber}
-                    onChange={(e) =>
-                      setCatalogueFilters((prev) => ({ ...prev, productNumber: e.target.value }))
-                    }
-                    onKeyDown={(e) => e.key === 'Enter' && fetchCatalogue()}
-                    className="product-filter-input"
-                    disabled={!orderDateTime.trim() || !expectedDeliveryDate.trim()}
-                  />
-                </label>
-                <label className="product-filter-label">
-                  <span>Product name</span>
-                  <input
-                    type="text"
-                    placeholder=""
-                    value={catalogueFilters.productName}
-                    onChange={(e) =>
-                      setCatalogueFilters((prev) => ({ ...prev, productName: e.target.value }))
-                    }
-                    onKeyDown={(e) => e.key === 'Enter' && fetchCatalogue()}
-                    className="product-filter-input"
-                    disabled={!orderDateTime.trim() || !expectedDeliveryDate.trim()}
-                  />
-                </label>
-                <label className="product-filter-label product-filter-dropdown">
-                  <span>Category</span>
-                  <select
-                    value={catalogueFilters.categoryName}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setCatalogueFilters((prev) => ({ ...prev, categoryName: v }));
-                      if (orderDateTime.trim() && expectedDeliveryDate.trim())
-                        fetchCatalogue({ categoryName: v });
-                    }}
-                    className="product-filter-select"
-                    disabled={!orderDateTime.trim() || !expectedDeliveryDate.trim()}
-                  >
-                    <option value="">All</option>
-                    {catalogueFilterOptions.category_names.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="product-filter-label product-filter-dropdown">
-                  <span>Subcategory</span>
-                  <select
-                    value={catalogueFilters.subcategoryName}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setCatalogueFilters((prev) => ({ ...prev, subcategoryName: v }));
-                      if (orderDateTime.trim() && expectedDeliveryDate.trim())
-                        fetchCatalogue({ subcategoryName: v });
-                    }}
-                    className="product-filter-select"
-                    disabled={!orderDateTime.trim() || !expectedDeliveryDate.trim()}
-                  >
-                    <option value="">All</option>
-                    {catalogueFilterOptions.subcategory_names.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="product-filter-label product-filter-dropdown">
-                  <span>Microcategory</span>
-                  <select
-                    value={catalogueFilters.microcategoryName}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setCatalogueFilters((prev) => ({ ...prev, microcategoryName: v }));
-                      if (orderDateTime.trim() && expectedDeliveryDate.trim())
-                        fetchCatalogue({ microcategoryName: v });
-                    }}
-                    className="product-filter-select"
-                    disabled={!orderDateTime.trim() || !expectedDeliveryDate.trim()}
-                  >
-                    <option value="">All</option>
-                    {catalogueFilterOptions.microcategory_names.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  onClick={fetchCatalogue}
-                  disabled={
-                    catalogueLoading || !orderDateTime.trim() || !expectedDeliveryDate.trim()
-                  }
-                  className="product-search-btn"
-                >
-                  {catalogueLoading ? 'Loading...' : 'Apply filters'}
-                </button>
-              </div>
-            </div>
-            {catalogueError && <p className="products-error-msg">{catalogueError}</p>}
-            <div className="product-catalogue-table-wrap">
-              {orderDateTime.trim() && expectedDeliveryDate.trim() && catalogueSearched && (
-                <>
-                  {catalogueProducts.length > 0 && (
-                    <>
-                      <p className="catalogue-table-hint">
-                        Select up to {MAX_CATALOGUE_SELECT} products, then click Show Vendor
-                        Products.{' '}
-                        {selectedCatalogueIds.size > 0 && `${selectedCatalogueIds.size} selected.`}
-                      </p>
-                      <table className="product-catalogue-table catalogue-from-pg">
-                        <thead>
-                          <tr>
-                            <th className="th-checkbox">Select</th>
-                            <th>Product Number</th>
-                            <th>Product Name</th>
-                            <th>Category</th>
-                            <th>Subcategory</th>
-                            <th>Microcategory</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {catalogueProducts.map((row) => (
-                            <tr key={row.id}>
-                              <td className="td-checkbox">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedCatalogueIds.has(row.id)}
-                                  onChange={() => toggleCatalogueSelection(row.id)}
-                                  disabled={
-                                    !selectedCatalogueIds.has(row.id) &&
-                                    selectedCatalogueIds.size >= MAX_CATALOGUE_SELECT
-                                  }
-                                  aria-label={`Select ${row.name || row.number}`}
-                                />
-                              </td>
-                              <td>{row.number ?? '—'}</td>
-                              <td>{row.name ?? '—'}</td>
-                              <td>{row.category_name ?? '—'}</td>
-                              <td>{row.subcategory_name ?? '—'}</td>
-                              <td>{row.microcategory_name ?? '—'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      <button
-                        type="button"
-                        onClick={fetchPricingForSelected}
-                        disabled={
-                          pricingBatchLoading ||
-                          selectedCatalogueIds.size === 0 ||
-                          selectedCatalogueIds.size > MAX_CATALOGUE_SELECT ||
-                          (filters.vendors?.length ?? 0) !== 1 ||
-                          (filters.markets?.length ?? 0) !== 1
-                        }
-                        className="product-search-btn get-pricing-btn"
-                      >
-                        {pricingBatchLoading ? 'Loading...' : 'Show Vendor Products'}
-                      </button>
-                    </>
-                  )}
-                  {!catalogueLoading && catalogueProducts.length === 0 && (
-                    <p className="no-products-msg">
-                      No products match the filters. Adjust filters and click Apply filters.
-                    </p>
-                  )}
-                </>
-              )}
-              {orderDateTime.trim() && expectedDeliveryDate.trim() && !catalogueSearched && (
-                <p className="no-products-msg">
-                  Use the filters above and click Apply filters to load the product catalogue.
+            <button
+              type="button"
+              className="collapsible-section-header"
+              onClick={() => setProductsSectionExpanded(!productsSectionExpanded)}
+              aria-expanded={productsSectionExpanded}
+              aria-controls="products-section-content"
+              id="products-section-toggle"
+            >
+              <span className="collapsible-chevron" aria-hidden>
+                {productsSectionExpanded ? '\u25BC' : '\u25B6'}
+              </span>
+              <h2>Products</h2>
+            </button>
+            {productsSectionExpanded && (
+              <div id="products-section-content" className="collapsible-section-content">
+                <p className="section-note">
+                  Set Order date &amp; time and Expected delivery date above, select one Vendor and
+                  one Market. Filter the product catalogue (wildcards for number/name; dropdowns for
+                  category, subcategory, microcategory). Select up to {MAX_CATALOGUE_SELECT}{' '}
+                  products and click Show Vendor Products, then Add selected to order lines. Max{' '}
+                  {MAX_PRODUCT_LINES} order lines.
                 </p>
-              )}
-            </div>
-            <div className="product-pricing-section">
-              <h3 className="product-pricing-heading">Pricing results (from Crunchtime)</h3>
-              <p className="section-note">
-                After clicking Show Vendor Products, select rows below and click Add selected to add
-                to order lines.
-              </p>
-              <div className="product-show-alt-row">
-                <label className="product-show-alt-label">
-                  <input
-                    type="checkbox"
-                    checked={showAltItems}
-                    onChange={(e) => setShowAltItems(e.target.checked)}
-                  />
-                  <span>Show Alt items</span>
-                </label>
-                <span className="product-show-alt-hint">
-                  When selected, alternate vendor products are listed with *
-                </span>
-              </div>
-              {productsError && <p className="products-error-msg">{productsError}</p>}
-              <div className="product-catalogue-table-wrap">
-                {productDisplayRows.length > 0 && (
-                  <>
-                    <table className="product-catalogue-table">
-                      <thead>
-                        <tr>
-                          <th className="th-checkbox">
-                            <label className="select-all-label">
-                              <input
-                                type="checkbox"
-                                checked={
-                                  productDisplayRows.length > 0 &&
-                                  productSelection.size === productDisplayRows.length
-                                }
-                                onChange={(e) => {
-                                  if (e.target.checked) {
-                                    setProductSelection(
-                                      new Set(productDisplayRows.map((r) => r.id)),
-                                    );
-                                    setProductSelectAll(true);
-                                  } else {
-                                    setProductSelection(new Set());
-                                    setProductSelectAll(false);
-                                  }
-                                }}
-                                aria-label="Select all products"
-                              />
-                              <span>Select all</span>
-                            </label>
-                          </th>
-                          <th className="th-vo">Temporarily activate VO mode for this product</th>
-                          <th>Market</th>
-                          <th>Product Number</th>
-                          <th>Product Name</th>
-                          <th>Vendor Product Number</th>
-                          <th>Vendor unit</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {productDisplayRows.map((row) => (
-                          <tr key={row.id} className={row.isAlt ? 'product-catalogue-row-alt' : ''}>
-                            <td className="td-checkbox">
-                              <input
-                                type="checkbox"
-                                checked={productSelection.has(row.id)}
-                                onChange={(e) => {
-                                  setProductSelection((prev) => {
-                                    const next = new Set(prev);
-                                    if (e.target.checked) next.add(row.id);
-                                    else next.delete(row.id);
-                                    return next;
-                                  });
-                                }}
-                                aria-label={`Select ${row.productName}`}
-                              />
-                            </td>
-                            <td className="td-vo">
-                              <input
-                                type="checkbox"
-                                checked={tempActivateVOSelection.has(row.id)}
-                                onChange={(e) => {
-                                  setTempActivateVOSelection((prev) => {
-                                    const next = new Set(prev);
-                                    if (e.target.checked) next.add(row.id);
-                                    else next.delete(row.id);
-                                    return next;
-                                  });
-                                }}
-                                aria-label={`Temporarily activate VO mode for ${row.productName}`}
-                              />
-                            </td>
-                            <td>{row.market}</td>
-                            <td>{row.productNumber}</td>
-                            <td>{row.isAlt ? `${row.productName} *` : row.productName}</td>
-                            <td>{row.vendorProductNumber}</td>
-                            <td>{row.vendorUnit}</td>
-                          </tr>
+                {!orderDateTime.trim() || !expectedDeliveryDate.trim() ? (
+                  <p className="products-required-dates-msg">
+                    Set <strong>Order date &amp; time</strong> and{' '}
+                    <strong>Expected delivery date</strong> above to search and display products.
+                  </p>
+                ) : null}
+                <div className="product-catalogue-filters">
+                  <div className="product-filter-row">
+                    <label className="product-filter-label">
+                      <span>Product number</span>
+                      <input
+                        type="text"
+                        placeholder=""
+                        value={catalogueFilters.productNumber}
+                        onChange={(e) =>
+                          setCatalogueFilters((prev) => ({
+                            ...prev,
+                            productNumber: e.target.value,
+                          }))
+                        }
+                        onKeyDown={(e) => e.key === 'Enter' && fetchCatalogue()}
+                        className="product-filter-input"
+                        disabled={!orderDateTime.trim() || !expectedDeliveryDate.trim()}
+                      />
+                    </label>
+                    <label className="product-filter-label">
+                      <span>Product name</span>
+                      <input
+                        type="text"
+                        placeholder=""
+                        value={catalogueFilters.productName}
+                        onChange={(e) =>
+                          setCatalogueFilters((prev) => ({ ...prev, productName: e.target.value }))
+                        }
+                        onKeyDown={(e) => e.key === 'Enter' && fetchCatalogue()}
+                        className="product-filter-input"
+                        disabled={!orderDateTime.trim() || !expectedDeliveryDate.trim()}
+                      />
+                    </label>
+                    <label className="product-filter-label product-filter-dropdown">
+                      <span>Category</span>
+                      <select
+                        value={catalogueFilters.categoryName}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setCatalogueFilters((prev) => ({ ...prev, categoryName: v }));
+                          if (orderDateTime.trim() && expectedDeliveryDate.trim())
+                            fetchCatalogue({ categoryName: v });
+                        }}
+                        className="product-filter-select"
+                        disabled={!orderDateTime.trim() || !expectedDeliveryDate.trim()}
+                      >
+                        <option value="">All</option>
+                        {catalogueFilterOptions.category_names.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
                         ))}
-                      </tbody>
-                    </table>
+                      </select>
+                    </label>
+                    <label className="product-filter-label product-filter-dropdown">
+                      <span>Subcategory</span>
+                      <select
+                        value={catalogueFilters.subcategoryName}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setCatalogueFilters((prev) => ({ ...prev, subcategoryName: v }));
+                          if (orderDateTime.trim() && expectedDeliveryDate.trim())
+                            fetchCatalogue({ subcategoryName: v });
+                        }}
+                        className="product-filter-select"
+                        disabled={!orderDateTime.trim() || !expectedDeliveryDate.trim()}
+                      >
+                        <option value="">All</option>
+                        {catalogueFilterOptions.subcategory_names.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="product-filter-label product-filter-dropdown">
+                      <span>Microcategory</span>
+                      <select
+                        value={catalogueFilters.microcategoryName}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setCatalogueFilters((prev) => ({ ...prev, microcategoryName: v }));
+                          if (orderDateTime.trim() && expectedDeliveryDate.trim())
+                            fetchCatalogue({ microcategoryName: v });
+                        }}
+                        className="product-filter-select"
+                        disabled={!orderDateTime.trim() || !expectedDeliveryDate.trim()}
+                      >
+                        <option value="">All</option>
+                        {catalogueFilterOptions.microcategory_names.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <button
                       type="button"
-                      onClick={addSelectedProductsToTable}
+                      onClick={fetchCatalogue}
                       disabled={
-                        productDisplayRows.length === 0 ||
-                        productSelection.size === 0 ||
-                        lineItems.length >= MAX_PRODUCT_LINES
+                        catalogueLoading || !orderDateTime.trim() || !expectedDeliveryDate.trim()
                       }
                       className="product-search-btn"
-                      title="Add selected products to order lines"
                     >
-                      Add selected
+                      {catalogueLoading ? 'Loading...' : 'Apply filters'}
                     </button>
-                  </>
-                )}
-                {productsSearched &&
-                  !pricingBatchLoading &&
-                  productDisplayRows.length === 0 &&
-                  !productsError &&
-                  selectedCatalogueIds.size > 0 && (
+                  </div>
+                </div>
+                {catalogueError && <p className="products-error-msg">{catalogueError}</p>}
+                <div className="product-catalogue-table-wrap">
+                  {orderDateTime.trim() && expectedDeliveryDate.trim() && catalogueSearched && (
+                    <>
+                      {catalogueProducts.length > 0 && (
+                        <>
+                          <p className="catalogue-table-hint">
+                            Select up to {MAX_CATALOGUE_SELECT} products, then click Show Vendor
+                            Products.{' '}
+                            {selectedCatalogueIds.size > 0 &&
+                              `${selectedCatalogueIds.size} selected.`}
+                          </p>
+                          <table className="product-catalogue-table catalogue-from-pg">
+                            <thead>
+                              <tr>
+                                <th className="th-checkbox">Select</th>
+                                <th>Product Number</th>
+                                <th>Product Name</th>
+                                <th>Category</th>
+                                <th>Subcategory</th>
+                                <th>Microcategory</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {catalogueProducts.map((row) => (
+                                <tr key={row.id}>
+                                  <td className="td-checkbox">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedCatalogueIds.has(row.id)}
+                                      onChange={() => toggleCatalogueSelection(row.id)}
+                                      disabled={
+                                        !selectedCatalogueIds.has(row.id) &&
+                                        selectedCatalogueIds.size >= MAX_CATALOGUE_SELECT
+                                      }
+                                      aria-label={`Select ${row.name || row.number}`}
+                                    />
+                                  </td>
+                                  <td>{row.number ?? '—'}</td>
+                                  <td>{row.name ?? '—'}</td>
+                                  <td>{row.category_name ?? '—'}</td>
+                                  <td>{row.subcategory_name ?? '—'}</td>
+                                  <td>{row.microcategory_name ?? '—'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          <button
+                            type="button"
+                            onClick={fetchPricingForSelected}
+                            disabled={
+                              pricingBatchLoading ||
+                              selectedCatalogueIds.size === 0 ||
+                              selectedCatalogueIds.size > MAX_CATALOGUE_SELECT ||
+                              (filters.vendors?.length ?? 0) !== 1 ||
+                              (filters.markets?.length ?? 0) !== 1
+                            }
+                            className="product-search-btn get-pricing-btn"
+                          >
+                            {pricingBatchLoading ? 'Loading...' : 'Show Vendor Products'}
+                          </button>
+                        </>
+                      )}
+                      {!catalogueLoading && catalogueProducts.length === 0 && (
+                        <p className="no-products-msg">
+                          No products match the filters. Adjust filters and click Apply filters.
+                        </p>
+                      )}
+                    </>
+                  )}
+                  {orderDateTime.trim() && expectedDeliveryDate.trim() && !catalogueSearched && (
                     <p className="no-products-msg">
-                      No pricing returned for the selected products. Try different products or check
-                      vendor/market.
+                      Use the filters above and click Apply filters to load the product catalogue.
                     </p>
                   )}
-                {productsSearched &&
-                  !pricingBatchLoading &&
-                  productDisplayRows.length === 0 &&
-                  !productsError &&
-                  selectedCatalogueIds.size === 0 && (
-                    <p className="no-products-msg">
-                      Select up to {MAX_CATALOGUE_SELECT} products from the catalogue above and
-                      click Show Vendor Products to see vendor pricing here.
-                    </p>
-                  )}
+                </div>
+                <div className="product-pricing-section">
+                  <h3 className="product-pricing-heading">Pricing results (from Crunchtime)</h3>
+                  <p className="section-note">
+                    After clicking Show Vendor Products, select rows below and click Add selected to
+                    add to order lines.
+                  </p>
+                  <div className="product-show-alt-row">
+                    <label className="product-show-alt-label">
+                      <input
+                        type="checkbox"
+                        checked={showAltItems}
+                        onChange={(e) => setShowAltItems(e.target.checked)}
+                      />
+                      <span>Show Alt items</span>
+                    </label>
+                    <span className="product-show-alt-hint">
+                      When selected, alternate vendor products are listed with *
+                    </span>
+                  </div>
+                  {productsError && <p className="products-error-msg">{productsError}</p>}
+                  <div className="product-catalogue-table-wrap">
+                    {productDisplayRows.length > 0 && (
+                      <>
+                        <table className="product-catalogue-table">
+                          <thead>
+                            <tr>
+                              <th className="th-checkbox">
+                                <label className="select-all-label">
+                                  <input
+                                    type="checkbox"
+                                    checked={
+                                      productDisplayRows.length > 0 &&
+                                      productSelection.size === productDisplayRows.length
+                                    }
+                                    onChange={(e) => {
+                                      if (e.target.checked) {
+                                        setProductSelection(
+                                          new Set(productDisplayRows.map((r) => r.id)),
+                                        );
+                                        setProductSelectAll(true);
+                                      } else {
+                                        setProductSelection(new Set());
+                                        setProductSelectAll(false);
+                                      }
+                                    }}
+                                    aria-label="Select all products"
+                                  />
+                                  <span>Select all</span>
+                                </label>
+                              </th>
+                              <th className="th-vo">
+                                Temporarily activate VO mode for this product
+                              </th>
+                              <th>Market</th>
+                              <th>Product Number</th>
+                              <th>Product Name</th>
+                              <th>Vendor Product Number</th>
+                              <th>Vendor unit</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {productDisplayRows.map((row) => (
+                              <tr
+                                key={row.id}
+                                className={row.isAlt ? 'product-catalogue-row-alt' : ''}
+                              >
+                                <td className="td-checkbox">
+                                  <input
+                                    type="checkbox"
+                                    checked={productSelection.has(row.id)}
+                                    onChange={(e) => {
+                                      if (e.target.checked) {
+                                        setProductSelection((prev) => {
+                                          const next = new Set(prev);
+                                          next.add(row.id);
+                                          return next;
+                                        });
+                                      } else {
+                                        flushProductOnDeselect(row);
+                                      }
+                                    }}
+                                    aria-label={`Select ${row.productName}`}
+                                  />
+                                </td>
+                                <td className="td-vo">
+                                  <input
+                                    type="checkbox"
+                                    checked={tempActivateVOSelection.has(row.id)}
+                                    onChange={(e) => {
+                                      setTempActivateVOSelection((prev) => {
+                                        const next = new Set(prev);
+                                        if (e.target.checked) next.add(row.id);
+                                        else next.delete(row.id);
+                                        return next;
+                                      });
+                                    }}
+                                    aria-label={`Temporarily activate VO mode for ${row.productName}`}
+                                  />
+                                </td>
+                                <td>{row.market}</td>
+                                <td>{row.productNumber}</td>
+                                <td>{row.isAlt ? `${row.productName} *` : row.productName}</td>
+                                <td>{row.vendorProductNumber}</td>
+                                <td>{row.vendorUnit}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        <button
+                          type="button"
+                          onClick={addSelectedProductsToTable}
+                          disabled={
+                            productDisplayRows.length === 0 ||
+                            productSelection.size === 0 ||
+                            lineItems.length >= MAX_PRODUCT_LINES
+                          }
+                          className="product-search-btn"
+                          title="Add selected products to order lines"
+                        >
+                          Add selected
+                        </button>
+                      </>
+                    )}
+                    {productsSearched &&
+                      !pricingBatchLoading &&
+                      productDisplayRows.length === 0 &&
+                      !productsError &&
+                      selectedCatalogueIds.size > 0 && (
+                        <p className="no-products-msg">
+                          No pricing returned for the selected products. Try different products or
+                          check vendor/market.
+                        </p>
+                      )}
+                    {productsSearched &&
+                      !pricingBatchLoading &&
+                      productDisplayRows.length === 0 &&
+                      !productsError &&
+                      selectedCatalogueIds.size === 0 && (
+                        <p className="no-products-msg">
+                          Select up to {MAX_CATALOGUE_SELECT} products from the catalogue above and
+                          click Show Vendor Products to see vendor pricing here.
+                        </p>
+                      )}
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
           </section>
 
           <section className="auto-allocation-section order-lines-section">
-            <h2>Order lines</h2>
-            <p className="section-note">
-              Selected products and quantities. Default qty is 0; leave 0 or blank to exclude from
-              submit. Set a global qty and click Apply to fill all.
-            </p>
-            <div className="global-qty-row">
-              <label className="global-qty-label">
-                <span>Set Qty for all</span>
-                <input
-                  type="number"
-                  min={0}
-                  value={globalQty}
-                  onChange={(e) => setGlobalQty(e.target.value)}
-                  className="qty-input"
-                  placeholder="0"
-                />
-              </label>
-              <button type="button" onClick={applyGlobalQty} className="apply-qty-btn">
-                Apply
-              </button>
-            </div>
-            <div className="order-lines-table-wrap">
-              <table className="order-lines-table">
-                <thead>
-                  <tr>
-                    <th>Product Name</th>
-                    <th>Vendor Product Number</th>
-                    <th>Vendor Unit</th>
-                    <th className="th-vo-narrow">VO</th>
-                    <th>Qty</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {lineItems.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="empty-table-msg">
-                        Add products from the list above.
-                      </td>
-                    </tr>
-                  )}
-                  {lineItems.map((item) => (
-                    <tr key={item.id}>
-                      <td>{item.productName}</td>
-                      <td>{item.vendorProductNumber}</td>
-                      <td>{item.vendorUnit}</td>
-                      <td className="td-vo-narrow" title="Temporarily activate VO mode">
-                        {item.tempActivateVO ? 'VO' : '—'}
-                      </td>
-                      <td>
-                        <input
-                          type="number"
-                          min={0}
-                          value={item.qty}
-                          onChange={(e) => updateLineItemQty(item.id, e.target.value)}
-                          className="qty-input"
-                        />
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          onClick={() => removeLineItem(item.id)}
-                          className="remove-line-btn"
-                          title="Remove line"
-                        >
-                          ✕
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <button
+              type="button"
+              className="collapsible-section-header"
+              onClick={() => setOrderLinesSectionExpanded(!orderLinesSectionExpanded)}
+              aria-expanded={orderLinesSectionExpanded}
+              aria-controls="order-lines-section-content"
+              id="order-lines-section-toggle"
+            >
+              <span className="collapsible-chevron" aria-hidden>
+                {orderLinesSectionExpanded ? '\u25BC' : '\u25B6'}
+              </span>
+              <h2>Order lines</h2>
+            </button>
+            {orderLinesSectionExpanded && (
+              <div id="order-lines-section-content" className="collapsible-section-content">
+                <p className="section-note">
+                  Selected products and quantities. Default qty is 0; leave 0 or blank to exclude
+                  from submit. Set a global qty and click Apply to fill all.
+                </p>
+                <div className="global-qty-row">
+                  <label className="global-qty-label">
+                    <span>Set Qty for all</span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={globalQty}
+                      onChange={(e) => setGlobalQty(e.target.value)}
+                      className="qty-input"
+                      placeholder="0"
+                    />
+                  </label>
+                  <button type="button" onClick={applyGlobalQty} className="apply-qty-btn">
+                    Apply
+                  </button>
+                </div>
+                <div className="order-lines-table-wrap">
+                  <table className="order-lines-table">
+                    <thead>
+                      <tr>
+                        <th>Product Name</th>
+                        <th>Vendor Product Number</th>
+                        <th>Vendor Unit</th>
+                        <th className="th-vo-narrow">VO</th>
+                        <th>Qty</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {lineItems.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="empty-table-msg">
+                            Add products from the list above.
+                          </td>
+                        </tr>
+                      )}
+                      {lineItems.map((item) => (
+                        <tr key={item.id}>
+                          <td>{item.productName}</td>
+                          <td>{item.vendorProductNumber}</td>
+                          <td>{item.vendorUnit}</td>
+                          <td className="td-vo-narrow" title="Temporarily activate VO mode">
+                            {item.tempActivateVO ? 'VO' : '—'}
+                          </td>
+                          <td>
+                            <input
+                              type="number"
+                              min={0}
+                              value={item.qty}
+                              onChange={(e) => updateLineItemQty(item.id, e.target.value)}
+                              className="qty-input"
+                            />
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              onClick={() => removeLineItem(item.id)}
+                              className="remove-line-btn"
+                              title="Remove line"
+                            >
+                              ✕
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </section>
 
           <section className="auto-allocation-section submit-section">
@@ -1580,7 +1906,7 @@ export default function AutoAllocation() {
                 <thead>
                   <tr>
                     <th className="th-checkbox">
-                      <label className="select-all-label">
+                      <label className="select-all-label select-all-label-stacked">
                         <input
                           type="checkbox"
                           checked={
@@ -1589,7 +1915,10 @@ export default function AutoAllocation() {
                           onChange={(e) => setReviewApprovedAll(e.target.checked)}
                           aria-label="Approve all"
                         />
-                        <span>Approve ALL</span>
+                        <span className="header-stacked-wrap">
+                          <span className="header-stacked-lines">Approve</span>
+                          <span className="header-stacked-lines">All</span>
+                        </span>
                       </label>
                     </th>
                     <th>State</th>
@@ -1597,8 +1926,24 @@ export default function AutoAllocation() {
                     <th>Vendor</th>
                     <th>Distribution Centre</th>
                     <th>Location Name</th>
+                    <th>Order Date</th>
+                    <th>Order Day</th>
+                    <th className="header-stacked">
+                      <span className="header-stacked-lines">Days From</span>
+                      <span className="header-stacked-lines">Selected</span>
+                      <span className="header-stacked-lines">Order Date</span>
+                    </th>
+                    <th className="header-stacked">
+                      <span className="header-stacked-lines">Schedule</span>
+                      <span className="header-stacked-lines">Not</span>
+                      <span className="header-stacked-lines">Defined</span>
+                    </th>
                     <th>Expected Delivery Date</th>
-                    <th>Expected Delivery Day</th>
+                    <th className="header-stacked">
+                      <span className="header-stacked-lines">Expected</span>
+                      <span className="header-stacked-lines">Delivery</span>
+                      <span className="header-stacked-lines">Day</span>
+                    </th>
                     <th className="th-indent">Product Name</th>
                     <th className="th-indent">Qty</th>
                   </tr>
@@ -1606,7 +1951,7 @@ export default function AutoAllocation() {
                 <tbody>
                   {reviewRows.length === 0 && (
                     <tr>
-                      <td colSpan={10} className="empty-table-msg">
+                      <td colSpan={14} className="empty-table-msg">
                         Select locations and add products with qty &gt; 0 to see rows.
                       </td>
                     </tr>
@@ -1630,6 +1975,10 @@ export default function AutoAllocation() {
                         <td>{row.vendor}</td>
                         <td>{row.distributionCenter}</td>
                         <td>{row.locationName}</td>
+                        <td>{row.orderDate}</td>
+                        <td>{row.orderDay}</td>
+                        <td>{row.daysFromSelectedOrderDate}</td>
+                        <td>{row.scheduleNotDefined ? 'X' : ''}</td>
                         <td>
                           <input
                             type="date"

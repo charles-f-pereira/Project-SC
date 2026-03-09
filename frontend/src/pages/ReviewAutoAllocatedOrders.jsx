@@ -1,10 +1,95 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import * as XLSX from 'xlsx';
 import client from '../api/client.js';
 import { formatDateDisplay, formatDateTimeDisplay } from '../utils/dateFormat.js';
 import './ReviewAutoAllocatedOrders.css';
 
 const DEFAULT_LIMIT = 100;
+/** When any filter is applied, request up to this many rows so filtered results are not capped at 100 */
+const FILTERED_LIMIT = 500;
+
+function exportFilename(ext) {
+  const yyyy = new Date().getFullYear();
+  const mm = String(new Date().getMonth() + 1).padStart(2, '0');
+  const dd = String(new Date().getDate()).padStart(2, '0');
+  return `review-auto-allocated-orders-${yyyy}-${mm}-${dd}.${ext}`;
+}
+
+function downloadAsExcel(transactions, formatDateDisplayFn, formatDateTimeDisplayFn) {
+  const headers = [
+    'State',
+    'Market',
+    'Vendor',
+    'Distribution Center',
+    'Acc Code',
+    'Location Name',
+    'Expected Delivery Date',
+    'Expected Delivery Day',
+    'Set Submit Date',
+    'Submitted Date',
+    'PO Number',
+    'Confirmed Received',
+  ];
+  const rows = transactions.map((tx) => [
+    tx.state ?? '',
+    tx.market ?? '',
+    tx.vendorName ?? '',
+    tx.distributionCenter ?? '',
+    tx.accountNumber ?? '',
+    tx.locationName ?? tx.locationCode ?? '',
+    tx.setExpectedDeliveryDate ? formatDateDisplayFn(tx.setExpectedDeliveryDate) || '' : '',
+    tx.setExpectedDeliveryDOW ?? '',
+    tx.setOrderDateTme ? formatDateTimeDisplayFn(tx.setOrderDateTme) || '' : '',
+    tx.submittedDateTime ? formatDateTimeDisplayFn(tx.submittedDateTime) || '' : '',
+    tx.transactionNo ?? '',
+    tx.confirmReceivedStatus ?? '',
+  ]);
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  XLSX.utils.book_append_sheet(wb, ws, 'Review');
+  XLSX.writeFile(wb, exportFilename('xlsx'));
+}
+
+function downloadAsPdf(transactions, formatDateDisplayFn, formatDateTimeDisplayFn) {
+  const headers = [
+    'State',
+    'Market',
+    'Vendor',
+    'Dist Center',
+    'Acc Code',
+    'Location',
+    'Exp Del Date',
+    'Exp Del Day',
+    'Set Submit',
+    'Submitted',
+    'PO Number',
+    'Confirmed',
+  ];
+  const body = transactions.map((tx) => [
+    tx.state ?? '',
+    tx.market ?? '',
+    tx.vendorName ?? '',
+    tx.distributionCenter ?? '',
+    tx.accountNumber ?? '',
+    tx.locationName ?? tx.locationCode ?? '',
+    tx.setExpectedDeliveryDate ? formatDateDisplayFn(tx.setExpectedDeliveryDate) || '' : '',
+    tx.setExpectedDeliveryDOW ?? '',
+    tx.setOrderDateTme ? formatDateTimeDisplayFn(tx.setOrderDateTme) || '' : '',
+    tx.submittedDateTime ? formatDateTimeDisplayFn(tx.submittedDateTime) || '' : '',
+    tx.transactionNo ?? '',
+    tx.confirmReceivedStatus ?? '',
+  ]);
+  const doc = new jsPDF({ orientation: 'landscape' });
+  autoTable(doc, {
+    head: [headers],
+    body,
+    styles: { fontSize: 7 },
+  });
+  doc.save(exportFilename('pdf'));
+}
 
 export default function ReviewAutoAllocatedOrders() {
   const [transactions, setTransactions] = useState([]);
@@ -36,9 +121,21 @@ export default function ReviewAutoAllocatedOrders() {
       .catch(() => setFilterOptions({ states: [], markets: [], vendors: [], locations: [] }));
   }, []);
 
+  const hasActiveFilters = !!(
+    filters.state ||
+    filters.market ||
+    filters.vendor ||
+    filters.location ||
+    filters.fromDate ||
+    filters.toDate ||
+    (filters.poNumber && filters.poNumber.trim()) ||
+    filters.notSubmitted
+  );
+
   const fetchTransactions = useCallback(() => {
     setLoading(true);
-    const params = { limit: DEFAULT_LIMIT, offset: 0 };
+    const limit = hasActiveFilters ? FILTERED_LIMIT : DEFAULT_LIMIT;
+    const params = { limit, offset: 0 };
     if (filters.state) params.state = filters.state;
     if (filters.market) params.market = filters.market;
     if (filters.vendor) params.vendor = filters.vendor;
@@ -52,7 +149,7 @@ export default function ReviewAutoAllocatedOrders() {
       .then((res) => setTransactions(res.data?.data || []))
       .catch(() => setTransactions([]))
       .finally(() => setLoading(false));
-  }, [filters]);
+  }, [filters, hasActiveFilters]);
 
   useEffect(() => {
     fetchFilterOptions();
@@ -112,8 +209,9 @@ export default function ReviewAutoAllocatedOrders() {
         <section className="review-section-card">
           <h2>Review Auto Allocated Orders</h2>
           <p className="section-note">
-            Last {DEFAULT_LIMIT} transactions (ordered by newest). Use filters to narrow. Click a PO
-            number to view product details.
+            Last {hasActiveFilters ? FILTERED_LIMIT : DEFAULT_LIMIT} transactions
+            {hasActiveFilters ? ' (with filters applied)' : ' (ordered by newest)'}. Use filters to
+            narrow. Click a PO number to view product details.
           </p>
           <div className="review-actions">
             <Link to="/auto-allocation" className="link-to-auto-allocation">
@@ -126,6 +224,26 @@ export default function ReviewAutoAllocatedOrders() {
               className="refresh-transactions-btn"
             >
               {loading ? 'Loading...' : 'Refresh'}
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                downloadAsExcel(transactions, formatDateDisplay, formatDateTimeDisplay)
+              }
+              disabled={transactions.length === 0}
+              className="review-download-btn"
+              title="Download filtered data as Excel"
+            >
+              Download Excel
+            </button>
+            <button
+              type="button"
+              onClick={() => downloadAsPdf(transactions, formatDateDisplay, formatDateTimeDisplay)}
+              disabled={transactions.length === 0}
+              className="review-download-btn"
+              title="Download filtered data as PDF"
+            >
+              Download PDF
             </button>
           </div>
 
@@ -253,6 +371,7 @@ export default function ReviewAutoAllocatedOrders() {
                   <th>Market</th>
                   <th>Vendor</th>
                   <th>Distribution Center</th>
+                  <th>Acc Code</th>
                   <th>Location Name</th>
                   <th>Expected Delivery Date</th>
                   <th>Expected Delivery Day</th>
@@ -265,7 +384,7 @@ export default function ReviewAutoAllocatedOrders() {
               <tbody>
                 {transactions.length === 0 && !loading && (
                   <tr>
-                    <td colSpan={11} className="empty-table-msg">
+                    <td colSpan={12} className="empty-table-msg">
                       No transactions yet. Submit an order from Auto Allocation.
                     </td>
                   </tr>
@@ -276,6 +395,7 @@ export default function ReviewAutoAllocatedOrders() {
                     <td>{tx.market ?? '—'}</td>
                     <td>{tx.vendorName ?? '—'}</td>
                     <td>{tx.distributionCenter ?? '—'}</td>
+                    <td>{tx.accountNumber ?? '—'}</td>
                     <td>{tx.locationName ?? tx.locationCode ?? '—'}</td>
                     <td>
                       {tx.setExpectedDeliveryDate

@@ -156,3 +156,11 @@
   margin: 0 auto;
   background-color: #f5f5f5;
 }
+
+.app-main--full-width {
+  max-width: none;
+  width: 100%;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+  box-sizing: border-box;
+}

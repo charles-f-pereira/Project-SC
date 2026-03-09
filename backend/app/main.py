@@ -48,13 +48,16 @@ app = FastAPI(
 _scheduler = BackgroundScheduler()
 _scheduler.add_job(run_scheduled_po_job, "interval", minutes=1, id="scheduled_po")
 
-# Allow the Vite dev server to call us
+# Allow the Vite dev server to call us (localhost and 127.0.0.1 are different origins to the browser)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
         "http://localhost:5174",
         "http://localhost:5175",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:5175",
         "http://192.168.1.247:5173",
         "http://192.168.1.247:5174",
         "http://192.168.1.247:5175",
@@ -74,6 +77,9 @@ async def _startup_banner():
     _setup_scheduler_logging()
     _scheduler.start()
     print("[startup] APScheduler started (scheduled PO job every 1 min)")
+    print(
+        "[startup] API ready at http://localhost:8000 — open the frontend (run start_test_frontend.bat) and refresh if you see 'Cannot reach the API'."
+    )
 
 
 @app.on_event("shutdown")

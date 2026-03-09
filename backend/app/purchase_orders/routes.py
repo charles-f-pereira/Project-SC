@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -20,6 +21,8 @@ from app.purchase_orders.schemas import (
     PurchaseOrderSubmitRequest,
     PurchaseOrderSubmitResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 # Delay between saveLocationProductPricing (activate) and savePurchaseOrders (seconds)
 VO_ACTIVATE_DELAY_SECONDS = 3
@@ -46,6 +49,12 @@ def _get_pg_connection():
 
 
 SAVE_PURCHASE_ORDERS_PATH = "/purchaseorder/v1/savePurchaseOrders"
+GET_ALL_VENDOR_LOCATION_PATH = "/vendorlocation/v1/getAllVendorLocation"
+CT_VENDOR_LOCATION_FIXED_PARAMS = {
+    "activeFlag": "true",
+    "includeDetails": "true",
+    "includeNull": "false",
+}
 # Trigger time within this many minutes of now (user's local time) is treated as "submit now" (user has time to review)
 IMMEDIATE_WINDOW_MINUTES = 5
 MAX_SCHEDULE_DAYS = 14
@@ -53,6 +62,85 @@ MAX_SCHEDULE_DAYS = 14
 ORDER_TIME_TOLERANCE_SECONDS = 600
 
 DEFAULT_ORDER_TZ = "Australia/Sydney"
+
+
+def _normalize_vendor_location_response(data) -> list:
+    """Extract list of vendor-location items from Crunchtime getAllVendorLocation response."""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in (
+            "data",
+            "vendorLocations",
+            "VendorLocations",
+            "locations",
+            "Locations",
+        ):
+            val = data.get(key)
+            if isinstance(val, list):
+                return val
+        return [data]
+    return []
+
+
+async def _fetch_account_number_for_location(
+    location_code: str, vendor_code: str
+) -> str | None:
+    """
+    Call Crunchtime getAllVendorLocation for location_code and return accountNumber
+    for the vendor matching vendor_code (from vendorLocationTransmissionDetail.accountNumber).
+    Returns None if not found or on error.
+    """
+    if not (location_code and location_code.strip()) or not (
+        vendor_code and vendor_code.strip()
+    ):
+        return None
+    params = dict(CT_VENDOR_LOCATION_FIXED_PARAMS)
+    params["locationCode"] = location_code.strip()
+    headers = {
+        **ct_headers(token_override=service_token("vendorlocation")),
+        "accept": "application/json",
+    }
+    try:
+        async with get_async_client() as client:
+            resp = await client.get(
+                GET_ALL_VENDOR_LOCATION_PATH,
+                params=params,
+                headers=headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception:
+        return None
+    items = _normalize_vendor_location_response(data)
+    want = (vendor_code or "").strip()
+    for raw in items:
+        if not isinstance(raw, dict):
+            continue
+        header = (
+            raw.get("vendorLocationHeaderDetails")
+            or raw.get("VendorLocationHeaderDetails")
+            or {}
+        )
+        vc = (
+            header.get("vendorCode")
+            or header.get("VendorCode")
+            or raw.get("vendorCode")
+            or raw.get("VendorCode")
+            or ""
+        )
+        if (vc or "").strip() != want:
+            continue
+        trans = (
+            raw.get("vendorLocationTransmissionDetail")
+            or raw.get("VendorLocationTransmissionDetail")
+            or {}
+        )
+        acc = trans.get("accountNumber") or trans.get("AccountNumber")
+        if acc is not None and str(acc).strip():
+            return str(acc).strip()
+        return None
+    return None
 
 
 def _get_zone(tz_name: str | None):
@@ -207,6 +295,41 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                     status_code=400,
                     detail=f"Expected delivery date for location index {i} must be YYYY-MM-DD.",
                 )
+
+    # Per-location order date/times (optional): when provided, each location gets its own trigger time
+    per_location_order_utc = None
+    order_date_times_list = body.order_date_times
+    if order_date_times_list is not None:
+        if len(order_date_times_list) != len(body.location_codes):
+            raise HTTPException(
+                status_code=400,
+                detail="order_date_times length must match location_codes.",
+            )
+        per_location_order_utc = []
+        for i, odt_str in enumerate(order_date_times_list):
+            odt_str = (odt_str or "").strip()
+            if not odt_str:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Order date/time required for location index {i}.",
+                )
+            loc_dt = _parse_order_datetime_local(odt_str, tz_name)
+            if not loc_dt:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid order_date_times[{i}] format. Use YYYY-MM-DDTHH:mm (in your local timezone).",
+                )
+            if loc_dt < min_order_time:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Order date/time for location index {i} must be current or future (in your local timezone).",
+                )
+            if loc_dt > max_schedule:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Order date/time for location index {i} cannot be more than {MAX_SCHEDULE_DAYS} days in the future.",
+                )
+            per_location_order_utc.append(loc_dt.astimezone(timezone.utc))
 
     # Per-location line items (optional)
     location_line_items_list = body.location_line_items
@@ -384,110 +507,146 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
     else:
         set_order_utc = order_dt.astimezone(timezone.utc)
 
-    # Persist to CTH (one header per location; reuse order_number by index or single for all)
+    # Persist to CTH for both immediate and scheduled orders so ALL purchase orders can be reviewed.
+    # Immediate ("Now"): status SUBMITTED, submittedDateTime and transactionNo from Crunchtime response.
+    # Scheduled: status SCHEDULED; scheduler will submit at trigger time and update the row.
+    # If persist fails or is skipped, we return an error so the frontend shows it.
     location_details_list = body.location_details or []
-    if PG_NAME and PG_PASSWORD:
-        try:
-            import psycopg2
+    if not (PG_NAME and PG_PASSWORD):
+        logger.warning(
+            "Cannot persist to CTH: pgName or pgPassword not set in env. "
+            "Set pgName and pgPassword (and pgHost, pgDatabase) in .env or .env.production."
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Database is not configured. Orders cannot be saved or shown on the Review page. "
+                "Set pgName and pgPassword (and pgHost, pgDatabase) in backend .env."
+            ),
+        )
+    try:
+        import psycopg2
 
-            conn = psycopg2.connect(
-                host=PG_HOST,
-                port=PG_PORT,
-                dbname=PG_DATABASE,
-                user=PG_NAME,
-                password=PG_PASSWORD,
+        conn = psycopg2.connect(
+            host=PG_HOST,
+            port=PG_PORT,
+            dbname=PG_DATABASE,
+            user=PG_NAME,
+            password=PG_PASSWORD,
+        )
+        cur = conn.cursor()
+        status_val = "SUBMITTED" if submit_immediately else "SCHEDULED"
+        submitted_dt = now_utc if submit_immediately else None
+        submission_attempts_val = 1 if submit_immediately else 0
+        last_attempt_at_val = now_utc if submit_immediately else None
+        for i, loc_code in enumerate(body.location_codes):
+            trans_no = (
+                order_numbers[i]
+                if i < len(order_numbers)
+                else (order_numbers[0] if order_numbers else None)
             )
-            cur = conn.cursor()
-            status_val = "SUBMITTED" if submit_immediately else "SCHEDULED"
-            submitted_dt = now_utc if submit_immediately else None
-            submission_attempts_val = 1 if submit_immediately else 0
-            last_attempt_at_val = now_utc if submit_immediately else None
-            for i, loc_code in enumerate(body.location_codes):
-                trans_no = (
-                    order_numbers[i]
-                    if i < len(order_numbers)
-                    else (order_numbers[0] if order_numbers else None)
-                )
-                loc_detail = (
-                    location_details_list[i] if i < len(location_details_list) else None
-                )
-                country = loc_detail.country if loc_detail else None
-                state = loc_detail.state if loc_detail else None
-                location_name = loc_detail.location_name if loc_detail else None
-                market = loc_detail.market if loc_detail else None
-                vendor_name = body.vendor_name
-                loc_expected_date = (
-                    per_location_expected_dates[i]
-                    if i < len(per_location_expected_dates)
-                    else body.expected_delivery_date
-                )
-                expected_dow = _day_of_week_abbrev(loc_expected_date)
-                valid_lines_loc = (
-                    per_location_valid_lines[i]
-                    if i < len(per_location_valid_lines)
-                    else valid_lines_default
-                )
-                cur.execute(
-                    """
-                    INSERT INTO "CTH"."autoAllocationTransHdr" (
-                        country, state, "locationCode", "locationName", market,
-                        "vendorCode", "vendorName", "distributionCenter",
-                        "createDateTime", "setOrderDateTme", "setExpectedDeliveryDate",
-                        "setExpectedDeliveryDOW", "submittedDateTime", "transactionNo",
-                        status, "submission_attempts", "last_attempt_at", "failure_reason", "alert_sent_at"
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING "autoAllocateTransID"
-                    """,
-                    (
-                        country,
-                        state,
-                        loc_code,
-                        location_name,
-                        market,
-                        body.vendor_code,
-                        vendor_name,
-                        None,
-                        now_utc,
-                        set_order_utc,
-                        loc_expected_date,
-                        expected_dow,
-                        submitted_dt,
-                        trans_no,
-                        status_val,
-                        submission_attempts_val,
-                        last_attempt_at_val,
-                        None,
-                        None,
-                    ),
-                )
-                row = cur.fetchone()
-                hdr_id = row[0] if row else None
-                if hdr_id:
-                    for li in valid_lines_loc:
-                        temp_vo = "Y" if getattr(li, "temp_activate_vo", False) else "N"
-                        cur.execute(
-                            """
-                            INSERT INTO "CTH"."autoAllocationTransDtl" (
-                                "autoAllocateTransID", "productNumber", "productName",
-                                "vendorUnit", "orderQuantity", "vendorProductNumber", "TempActivateVO"
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                            """,
-                            (
-                                hdr_id,
-                                None if not li.product_number else li.product_number,
-                                li.product_name,
-                                li.vendor_unit or "",
-                                li.qty,
-                                li.vendor_product_number or "",
-                                temp_vo,
-                            ),
-                        )
-            conn.commit()
-            cur.close()
-            conn.close()
-        except Exception:
-            # Log but do not fail the request; Crunchtime already succeeded
-            pass
+            loc_detail = (
+                location_details_list[i] if i < len(location_details_list) else None
+            )
+            country = loc_detail.country if loc_detail else None
+            state = loc_detail.state if loc_detail else None
+            location_name = loc_detail.location_name if loc_detail else None
+            market = loc_detail.market if loc_detail else None
+            vendor_name = body.vendor_name
+            loc_expected_date = (
+                per_location_expected_dates[i]
+                if i < len(per_location_expected_dates)
+                else body.expected_delivery_date
+            )
+            expected_dow = _day_of_week_abbrev(loc_expected_date)
+            valid_lines_loc = (
+                per_location_valid_lines[i]
+                if i < len(per_location_valid_lines)
+                else valid_lines_default
+            )
+            # Use per-location order time when provided and scheduled; else single set_order_utc
+            loc_set_order_utc = (
+                per_location_order_utc[i]
+                if not submit_immediately
+                and per_location_order_utc is not None
+                and i < len(per_location_order_utc)
+                else set_order_utc
+            )
+            account_number = await _fetch_account_number_for_location(
+                loc_code, body.vendor_code
+            )
+            cur.execute(
+                """
+                INSERT INTO "CTH"."autoAllocationTransHdr" (
+                    country, state, "locationCode", "locationName", market,
+                    "vendorCode", "vendorName", "distributionCenter",
+                    "accountNumber",
+                    "createDateTime", "setOrderDateTme", "setExpectedDeliveryDate",
+                    "setExpectedDeliveryDOW", "submittedDateTime", "transactionNo",
+                    status, "submission_attempts", "last_attempt_at", "failure_reason", "alert_sent_at"
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING "autoAllocateTransID"
+                """,
+                (
+                    country,
+                    state,
+                    loc_code,
+                    location_name,
+                    market,
+                    body.vendor_code,
+                    vendor_name,
+                    None,
+                    account_number,
+                    now_utc,
+                    loc_set_order_utc,
+                    loc_expected_date,
+                    expected_dow,
+                    submitted_dt,
+                    trans_no,
+                    status_val,
+                    submission_attempts_val,
+                    last_attempt_at_val,
+                    None,
+                    None,
+                ),
+            )
+            row = cur.fetchone()
+            hdr_id = row[0] if row else None
+            if hdr_id:
+                for li in valid_lines_loc:
+                    temp_vo = "Y" if getattr(li, "temp_activate_vo", False) else "N"
+                    cur.execute(
+                        """
+                        INSERT INTO "CTH"."autoAllocationTransDtl" (
+                            "autoAllocateTransID", "productNumber", "productName",
+                            "vendorUnit", "orderQuantity", "vendorProductNumber", "TempActivateVO"
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            hdr_id,
+                            None if not li.product_number else li.product_number,
+                            li.product_name,
+                            li.vendor_unit or "",
+                            li.qty,
+                            li.vendor_product_number or "",
+                            temp_vo,
+                        ),
+                    )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.exception(
+            "Failed to persist order to CTH: %s",
+            e,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Order could not be saved to the database: {e!s}. "
+                "Check backend logs. Ensure CTH.autoAllocationTransHdr exists (run backend/sql/cth_auto_allocation_tables.sql and add_auto_allocation_account_number.sql)."
+            ),
+        )
 
     total_lines = sum(len(v) for v in per_location_valid_lines)
     if submit_immediately:
@@ -638,6 +797,10 @@ def get_transactions(
     """
     conn = _get_pg_connection()
     if not conn:
+        logger.warning(
+            "GET /transactions: no database connection (pgName/pgPassword not set?). "
+            "Review page will show no transactions."
+        )
         return {"data": []}
     try:
         cur = conn.cursor()
@@ -648,6 +811,7 @@ def get_transactions(
                 market,
                 "vendorName",
                 "distributionCenter",
+                "accountNumber",
                 "locationCode",
                 "locationName",
                 "setExpectedDeliveryDate",
@@ -718,11 +882,15 @@ def get_transactions(
         conn.close()
         return {"data": data}
     except Exception as e:
+        logger.exception("GET /transactions failed: %s", e)
         if conn:
             try:
                 conn.close()
             except Exception:
                 pass
+        # If table/relation doesn't exist yet, return empty so Review page still loads
+        if "does not exist" in str(e).lower() or "relation" in str(e).lower():
+            return {"data": []}
         raise HTTPException(
             status_code=500, detail=f"Failed to load transactions: {e!s}"
         )

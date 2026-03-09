@@ -98,26 +98,60 @@ To keep the backend (and its APScheduler job for scheduled POs) running after lo
 
 **NSSM** (Non-Sucking Service Manager) runs your existing uvicorn command as a service.
 
-1. Download NSSM from [nssm.cc](https://nssm.cc/download) and extract it (e.g. `C:\nssm`).
-2. Open **Command Prompt or PowerShell as Administrator**.
-3. Install the service (replace paths with your actual paths). Use **nssm.exe** (the executable inside the win64 folder):
-   ```powershell
-   cd "C:\path\to\Project SC\backend"
-   C:\nssm\win64\nssm.exe install ProjectSCBackend "C:\path\to\Project SC\backend\venv\Scripts\python.exe" "-m uvicorn app.main:app --host 0.0.0.0 --port 8000"
-   ```
-4. Set the working directory so the app and `.env` are found:
+**Steps to install the NSSM service:**
+
+1. **Download NSSM**  
+   Get it from [nssm.cc](https://nssm.cc/download) and extract it (e.g. `C:\nssm`). You will use **`nssm.exe`** from the **win64** folder.
+
+2. **Open an elevated shell**  
+   Open **Command Prompt or PowerShell as Administrator**.
+
+3. **Install the service** (replace `C:\path\to\Project SC` with your actual project path):
+   - **TEST** (port 8000, `.env` only):
+     ```powershell
+     C:\nssm\win64\nssm.exe install ProjectSCBackend "C:\path\to\Project SC\backend\venv\Scripts\python.exe" "-m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+     ```
+   - **PRODUCTION** (port 8001, loads `.env.production` then `.env`):
+     ```powershell
+     C:\nssm\win64\nssm.exe install ProjectSCBackend "C:\path\to\Project SC\backend\venv\Scripts\python.exe" "-m uvicorn app.main:app --host 0.0.0.0 --port 8001"
+     C:\nssm\win64\nssm.exe set ProjectSCBackend AppEnvironmentExtra "APP_ENV=production"
+     ```
+     Ensure `backend\.env.production` exists and has `CT_ENV=prod` and Crunchtime PROD tokens and DB settings.
+
+4. **Set the working directory** so the app finds `.env` / `.env.production`:
    ```powershell
    C:\nssm\win64\nssm.exe set ProjectSCBackend AppDirectory "C:\path\to\Project SC\backend"
    ```
-5. Start the service:
+
+5. **Start the service**
    ```powershell
    C:\nssm\win64\nssm.exe start ProjectSCBackend
    ```
    Or use **Services** (Win + R → `services.msc`): find **ProjectSCBackend**, Start, and set Startup type to **Automatic**.
 
-**Useful NSSM commands:** (prefix with your NSSM path, e.g. `C:\GYG\nssm\win64\nssm.exe`)
+**Useful NSSM commands** (prefix with your NSSM path, e.g. `C:\nssm\win64\nssm.exe`):
 - `nssm.exe stop ProjectSCBackend` / `nssm.exe start ProjectSCBackend`
 - `nssm.exe remove ProjectSCBackend confirm` – remove the service
+
+**If the service fails to start (e.g. SERVICE_PAUSED):**
+
+1. Set the working directory (required so the app finds `.env` / `.env.production`):
+   ```powershell
+   C:\nssm\win64\nssm.exe set ProjectSCProd AppDirectory "C:\path\to\Project SC\backend"
+   ```
+2. Capture stdout/stderr so you can see the real error:
+   ```powershell
+   mkdir "C:\path\to\Project SC\backend\logs" 2>nul
+   C:\nssm\win64\nssm.exe set ProjectSCProd AppStdout "C:\path\to\Project SC\backend\logs\service_stdout.log"
+   C:\nssm\win64\nssm.exe set ProjectSCProd AppStderr "C:\path\to\Project SC\backend\logs\service_stderr.log"
+   ```
+3. Start the service again, then open `backend\logs\service_stdout.log` and `service_stderr.log` to see why the process exited.
+4. Or run the same command manually (in a Command Prompt from the backend folder) to see the traceback immediately:
+   ```powershell
+   cd "C:\path\to\Project SC\backend"
+   set APP_ENV=production
+   venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8001
+   ```
 
 ### Option B – Python Windows service (pywin32)
 

@@ -1,11 +1,15 @@
 .review-auto-allocated {
   width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .review-auto-allocated-inner {
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: 0 1rem;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 0 0.5rem;
+  box-sizing: border-box;
 }
 
 .review-section-card {
@@ -63,6 +67,24 @@
 }
 
 .review-auto-allocated .refresh-transactions-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.review-auto-allocated .review-download-btn {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.9rem;
+  background: #f0f0f0;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.review-auto-allocated .review-download-btn:hover:not(:disabled) {
+  background: #e5e5e5;
+}
+
+.review-auto-allocated .review-download-btn:disabled {
   opacity: 0.7;
   cursor: not-allowed;
 }

@@ -52,6 +52,10 @@ class PurchaseOrderSubmitRequest(BaseModel):
         None,
         description="Per-location expected delivery date (YYYY-MM-DD), same order as location_codes. If provided, length must match location_codes.",
     )
+    order_date_times: Optional[List[str]] = Field(
+        None,
+        description="Per-location order date/time (ISO YYYY-MM-DDTHH:mm or YYYY-MM-DDTHH:mm:ss) in user timezone, same order as location_codes. If provided, length must match location_codes; each location's PO is triggered at that time. If omitted, single order_date_time is used for all.",
+    )
     location_details: Optional[List[LocationDetail]] = Field(
         None,
         description="Per-location Country, State, LocationName, Market for recording (same order as location_codes)",

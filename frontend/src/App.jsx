@@ -146,7 +146,14 @@ function App() {
           </div>
         </div>
       </header>
-      <main className="app-main">
+      <main
+        className={
+          location.pathname === '/auto-allocation' ||
+          location.pathname === '/review-auto-allocated-orders'
+            ? 'app-main app-main--full-width'
+            : 'app-main'
+        }
+      >
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/auto-allocation" element={<AutoAllocation />} />
