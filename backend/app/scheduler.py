@@ -21,6 +21,7 @@ from app.core.config import (
 )
 from app.core.crunchtime_api import ct_headers, service_token
 from app.purchase_orders.location_product_pricing import (
+    save_location_product_pricing_alt_primary_sync,
     save_location_product_pricing_sync,
 )
 
@@ -112,7 +113,8 @@ def run_scheduled_po_job():
         for hdr_id, location_code, vendor_code, expected_delivery in rows:
             cur.execute(
                 """
-                SELECT "vendorProductNumber", "orderQuantity", "vendorUnit", "productNumber", "TempActivateVO"
+                SELECT "vendorProductNumber", "orderQuantity", "vendorUnit", "productNumber",
+                       "TempActivateVO", "TempActivateAltPrimary"
                 FROM "CTH"."autoAllocationTransDtl"
                 WHERE "autoAllocateTransID" = %s
                 ORDER BY "autoAllocateItmTransID"
@@ -126,12 +128,17 @@ def run_scheduled_po_job():
                     "vendorProductNumber": (vpn or "").strip(),
                     "vendorUnit": (vu or "").strip(),
                 }
-                for vpn, qty, vu, _pn, _vo in detail_rows
+                for vpn, qty, vu, _pn, _vo, _alt in detail_rows
             ]
             vo_product_numbers = [
                 (str(pn).strip())
-                for _vpn, _qty, _vu, pn, temp_vo in detail_rows
+                for _vpn, _qty, _vu, pn, temp_vo, _alt in detail_rows
                 if pn and (str(temp_vo or "").strip().upper() == "Y")
+            ]
+            alt_primary_product_numbers = [
+                (str(pn).strip())
+                for _vpn, _qty, _vu, pn, _vo, temp_alt in detail_rows
+                if pn and (str(temp_alt or "").strip().upper() == "Y")
             ]
 
             if not detail_payload:
@@ -148,6 +155,38 @@ def run_scheduled_po_job():
                 )
                 conn.commit()
                 continue
+
+            # Activate alternate primary first (before VO)
+            if alt_primary_product_numbers:
+                ok, status, msg = save_location_product_pricing_alt_primary_sync(
+                    location_code, alt_primary_product_numbers, "Y"
+                )
+                if not ok:
+                    err_msg = f"saveLocationProductPricing (activate alternate primary) failed: status={status} {msg[:500]}"
+                    logger.warning(
+                        "scheduled_po_job: autoAllocateTransID=%s %s",
+                        hdr_id,
+                        err_msg,
+                    )
+                    cur.execute(
+                        """
+                        UPDATE "CTH"."autoAllocationTransHdr"
+                        SET "failure_reason" = %s, "last_attempt_at" = %s
+                        WHERE "autoAllocateTransID" = %s
+                        """,
+                        (err_msg[:2000], now_utc, hdr_id),
+                    )
+                    cur.execute(
+                        """
+                        UPDATE "CTH"."autoAllocationTransHdr"
+                        SET status = 'FAILED'
+                        WHERE "autoAllocateTransID" = %s AND "submission_attempts" >= %s
+                        """,
+                        (hdr_id, MAX_ATTEMPTS),
+                    )
+                    conn.commit()
+                    continue
+                time.sleep(VO_ACTIVATE_DELAY_SECONDS)
 
             if vo_product_numbers:
                 ok, status, msg = save_location_product_pricing_sync(
@@ -270,6 +309,15 @@ def run_scheduled_po_job():
                     )
                     logger.info(
                         "scheduled_po_job: autoAllocateTransID=%s deactivated VO for location=%s",
+                        hdr_id,
+                        location_code,
+                    )
+                if alt_primary_product_numbers:
+                    save_location_product_pricing_alt_primary_sync(
+                        location_code, alt_primary_product_numbers, "N"
+                    )
+                    logger.info(
+                        "scheduled_po_job: autoAllocateTransID=%s deactivated alternate primary for location=%s",
                         hdr_id,
                         location_code,
                     )

@@ -28,6 +28,10 @@ class PurchaseOrderLineItem(BaseModel):
         default=False,
         description="If true, activate product for VO ordering at location before PO, then deactivate after.",
     )
+    temp_activate_alt_primary: bool = Field(
+        default=False,
+        description="If true, set alternatePrimaryFlag Y before PO and N after (alternate vendor products only).",
+    )
 
 
 class PurchaseOrderSubmitRequest(BaseModel):

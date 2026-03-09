@@ -15,6 +15,7 @@ from app.core.config import (
 )
 from app.core.crunchtime_api import ct_headers, get_async_client, service_token
 from app.purchase_orders.location_product_pricing import (
+    save_location_product_pricing_alt_primary_sync,
     save_location_product_pricing_sync,
 )
 from app.purchase_orders.schemas import (
@@ -402,6 +403,39 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
     order_numbers = []
     now_utc = datetime.now(timezone.utc)
     if submit_immediately:
+        # Activate alternate primary for products with temp_activate_alt_primary (before VO)
+        locations_to_activate_alt_primary = []
+        for i, loc_code in enumerate(body.location_codes):
+            valid_lines = (
+                per_location_valid_lines[i]
+                if i < len(per_location_valid_lines)
+                else valid_lines_default
+            )
+            alt_primary_products = [
+                (li.product_number or "").strip()
+                for li in valid_lines
+                if getattr(li, "temp_activate_alt_primary", False)
+                and (li.product_number or "").strip()
+            ]
+            if alt_primary_products:
+                locations_to_activate_alt_primary.append(
+                    (loc_code, alt_primary_products)
+                )
+        for loc_code, product_numbers in locations_to_activate_alt_primary:
+            ok, status, msg = await asyncio.to_thread(
+                save_location_product_pricing_alt_primary_sync,
+                loc_code,
+                product_numbers,
+                "Y",
+            )
+            if not ok:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Crunchtime saveLocationProductPricing (activate alternate primary) failed for location {loc_code}: status={status} {msg[:300]}",
+                )
+        if locations_to_activate_alt_primary:
+            await asyncio.sleep(VO_ACTIVATE_DELAY_SECONDS)
+
         # Activate VO for products with temp_activate_vo (one call per location with such products)
         locations_to_activate = []
         for i, loc_code in enumerate(body.location_codes):
@@ -496,6 +530,14 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
         for loc_code, product_numbers in locations_to_activate:
             await asyncio.to_thread(
                 save_location_product_pricing_sync,
+                loc_code,
+                product_numbers,
+                "N",
+            )
+        # Deactivate alternate primary for products that were temporarily activated
+        for loc_code, product_numbers in locations_to_activate_alt_primary:
+            await asyncio.to_thread(
+                save_location_product_pricing_alt_primary_sync,
                 loc_code,
                 product_numbers,
                 "N",
@@ -615,12 +657,16 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
             if hdr_id:
                 for li in valid_lines_loc:
                     temp_vo = "Y" if getattr(li, "temp_activate_vo", False) else "N"
+                    temp_alt_primary = (
+                        "Y" if getattr(li, "temp_activate_alt_primary", False) else "N"
+                    )
                     cur.execute(
                         """
                         INSERT INTO "CTH"."autoAllocationTransDtl" (
                             "autoAllocateTransID", "productNumber", "productName",
-                            "vendorUnit", "orderQuantity", "vendorProductNumber", "TempActivateVO"
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            "vendorUnit", "orderQuantity", "vendorProductNumber",
+                            "TempActivateVO", "TempActivateAltPrimary"
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             hdr_id,
@@ -630,6 +676,7 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                             li.qty,
                             li.vendor_product_number or "",
                             temp_vo,
+                            temp_alt_primary,
                         ),
                     )
         conn.commit()

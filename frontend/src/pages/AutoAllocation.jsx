@@ -280,6 +280,7 @@ export default function AutoAllocation() {
   const [submitResult, setSubmitResult] = useState(null);
   const [productSelection, setProductSelection] = useState(new Set());
   const [tempActivateVOSelection, setTempActivateVOSelection] = useState(new Set());
+  const [tempActivateAltPrimarySelection, setTempActivateAltPrimarySelection] = useState(new Set());
   const [productSelectAll, setProductSelectAll] = useState(false);
   const [globalQty, setGlobalQty] = useState('');
   const [reviewApproved, setReviewApproved] = useState(new Set());
@@ -901,6 +902,7 @@ export default function AutoAllocation() {
       vendorUnit: product.vendorUnit || product.unit || '—',
       qty: 0,
       tempActivateVO: tempActivateVOSelection.has(product.id || ''),
+      tempActivateAltPrimary: tempActivateAltPrimarySelection.has(product.id || ''),
     };
     setLineItems((prev) => [...prev, newItem]);
   };
@@ -929,6 +931,7 @@ export default function AutoAllocation() {
             vendorUnit: p.vendorUnit || '—',
             qty: 0,
             tempActivateVO: tempActivateVOSelection.has(p.id),
+            tempActivateAltPrimary: tempActivateAltPrimarySelection.has(p.id),
           },
         ];
       });
@@ -1234,6 +1237,7 @@ export default function AutoAllocation() {
             vendor_unit: li.vendorUnit || '',
             qty,
             temp_activate_vo: li.tempActivateVO === true,
+            temp_activate_alt_primary: li.tempActivateAltPrimary === true,
           };
         })
         .filter(Boolean);
@@ -1694,6 +1698,9 @@ export default function AutoAllocation() {
                               <th className="th-vo">
                                 Temporarily activate VO mode for this product
                               </th>
+                              <th className="th-alt-primary">
+                                Temporarily activate Alternate Primary for this product
+                              </th>
                               <th>Market</th>
                               <th>Product Number</th>
                               <th>Product Name</th>
@@ -1739,6 +1746,25 @@ export default function AutoAllocation() {
                                     }}
                                     aria-label={`Temporarily activate VO mode for ${row.productName}`}
                                   />
+                                </td>
+                                <td className="td-alt-primary">
+                                  {row.isAlt ? (
+                                    <input
+                                      type="checkbox"
+                                      checked={tempActivateAltPrimarySelection.has(row.id)}
+                                      onChange={(e) => {
+                                        setTempActivateAltPrimarySelection((prev) => {
+                                          const next = new Set(prev);
+                                          if (e.target.checked) next.add(row.id);
+                                          else next.delete(row.id);
+                                          return next;
+                                        });
+                                      }}
+                                      aria-label={`Temporarily activate Alternate Primary for ${row.productName}`}
+                                    />
+                                  ) : (
+                                    <span aria-hidden>—</span>
+                                  )}
                                 </td>
                                 <td>{row.market}</td>
                                 <td>{row.productNumber}</td>
@@ -1834,6 +1860,7 @@ export default function AutoAllocation() {
                         <th>Vendor Product Number</th>
                         <th>Vendor Unit</th>
                         <th className="th-vo-narrow">VO</th>
+                        <th className="th-alt-primary-narrow">Alt Pri</th>
                         <th>Qty</th>
                         <th></th>
                       </tr>
@@ -1841,7 +1868,7 @@ export default function AutoAllocation() {
                     <tbody>
                       {lineItems.length === 0 && (
                         <tr>
-                          <td colSpan={6} className="empty-table-msg">
+                          <td colSpan={7} className="empty-table-msg">
                             Add products from the list above.
                           </td>
                         </tr>
@@ -1853,6 +1880,12 @@ export default function AutoAllocation() {
                           <td>{item.vendorUnit}</td>
                           <td className="td-vo-narrow" title="Temporarily activate VO mode">
                             {item.tempActivateVO ? 'VO' : '—'}
+                          </td>
+                          <td
+                            className="td-alt-primary-narrow"
+                            title="Temporarily activate Alternate Primary"
+                          >
+                            {item.tempActivateAltPrimary ? 'Y' : '—'}
                           </td>
                           <td>
                             <input
