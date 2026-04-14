@@ -14,6 +14,7 @@ from app.schedules.routes import router as schedules_router
 from app.holidays.routes import router as holidays_router
 from app.purchase_orders.routes import router as purchase_orders_router
 from app.products.routes import router as products_router
+from app.purchase_orders.confirm_receipt_sync import run_po_confirm_receipt_sync
 from app.scheduler import run_scheduled_po_job
 
 # Scheduler log: daily rotation, keep 30 days
@@ -41,12 +42,40 @@ def _setup_scheduler_logging():
     scheduler_logger.setLevel(logging.INFO)
 
 
+PURCHASE_ORDERS_LOG_BACKUP_DAYS = 30
+
+
+def _setup_purchase_orders_logging():
+    """Rotating JSON-line log for immediate PO submit (see purchase_order_logging.po_submit_log)."""
+    SCHEDULER_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_file = SCHEDULER_LOG_DIR / "purchase_orders.log"
+    handler = TimedRotatingFileHandler(
+        log_file,
+        when="midnight",
+        interval=1,
+        backupCount=PURCHASE_ORDERS_LOG_BACKUP_DAYS,
+        encoding="utf-8",
+    )
+    handler.suffix = "%Y-%m-%d"
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    )
+    po_logger = logging.getLogger("app.purchase_orders")
+    po_logger.handlers.clear()
+    po_logger.addHandler(handler)
+    po_logger.setLevel(logging.INFO)
+    po_logger.propagate = False
+
+
 app = FastAPI(
     title="Project SC API", description="Ordering & Delivery Schedule Administration"
 )
 
 _scheduler = BackgroundScheduler()
 _scheduler.add_job(run_scheduled_po_job, "interval", minutes=1, id="scheduled_po")
+_scheduler.add_job(
+    run_po_confirm_receipt_sync, "interval", hours=1, id="po_confirm_receipt"
+)
 
 # Allow the Vite dev server to call us (localhost and 127.0.0.1 are different origins to the browser)
 app.add_middleware(
@@ -75,8 +104,11 @@ async def _startup_banner():
         "[startup] Routers: locations, vendors, schedules, holidays, purchase_orders, products"
     )
     _setup_scheduler_logging()
+    _setup_purchase_orders_logging()
     _scheduler.start()
-    print("[startup] APScheduler started (scheduled PO job every 1 min)")
+    print(
+        "[startup] APScheduler started (scheduled PO job every 1 min; PO confirm-receipt sync every 1 h)"
+    )
     print(
         "[startup] API ready at http://localhost:8000 — open the frontend (run start_test_frontend.bat) and refresh if you see 'Cannot reach the API'."
     )

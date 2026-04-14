@@ -3,7 +3,6 @@ import logging
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import httpx
 from fastapi import APIRouter, HTTPException, Query
 
 from app.core.config import (
@@ -13,20 +12,17 @@ from app.core.config import (
     PG_PASSWORD,
     PG_PORT,
 )
-from app.core.crunchtime_api import ct_headers, get_async_client, service_token
-from app.purchase_orders.location_product_pricing import (
-    save_location_product_pricing_alt_primary_sync,
-    save_location_product_pricing_sync,
-)
+from app.purchase_orders.immediate_submit import run_immediate_submit
 from app.purchase_orders.schemas import (
     PurchaseOrderSubmitRequest,
     PurchaseOrderSubmitResponse,
 )
+from app.purchase_orders.confirm_receipt_sync import run_po_confirm_receipt_sync
+from app.purchase_orders.vendor_location_account import (
+    fetch_account_number_for_location,
+)
 
 logger = logging.getLogger(__name__)
-
-# Delay between saveLocationProductPricing (activate) and savePurchaseOrders (seconds)
-VO_ACTIVATE_DELAY_SECONDS = 3
 
 router = APIRouter()
 
@@ -49,13 +45,6 @@ def _get_pg_connection():
         return None
 
 
-SAVE_PURCHASE_ORDERS_PATH = "/purchaseorder/v1/savePurchaseOrders"
-GET_ALL_VENDOR_LOCATION_PATH = "/vendorlocation/v1/getAllVendorLocation"
-CT_VENDOR_LOCATION_FIXED_PARAMS = {
-    "activeFlag": "true",
-    "includeDetails": "true",
-    "includeNull": "false",
-}
 # Trigger time within this many minutes of now (user's local time) is treated as "submit now" (user has time to review)
 IMMEDIATE_WINDOW_MINUTES = 5
 MAX_SCHEDULE_DAYS = 14
@@ -63,85 +52,6 @@ MAX_SCHEDULE_DAYS = 14
 ORDER_TIME_TOLERANCE_SECONDS = 600
 
 DEFAULT_ORDER_TZ = "Australia/Sydney"
-
-
-def _normalize_vendor_location_response(data) -> list:
-    """Extract list of vendor-location items from Crunchtime getAllVendorLocation response."""
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        for key in (
-            "data",
-            "vendorLocations",
-            "VendorLocations",
-            "locations",
-            "Locations",
-        ):
-            val = data.get(key)
-            if isinstance(val, list):
-                return val
-        return [data]
-    return []
-
-
-async def _fetch_account_number_for_location(
-    location_code: str, vendor_code: str
-) -> str | None:
-    """
-    Call Crunchtime getAllVendorLocation for location_code and return accountNumber
-    for the vendor matching vendor_code (from vendorLocationTransmissionDetail.accountNumber).
-    Returns None if not found or on error.
-    """
-    if not (location_code and location_code.strip()) or not (
-        vendor_code and vendor_code.strip()
-    ):
-        return None
-    params = dict(CT_VENDOR_LOCATION_FIXED_PARAMS)
-    params["locationCode"] = location_code.strip()
-    headers = {
-        **ct_headers(token_override=service_token("vendorlocation")),
-        "accept": "application/json",
-    }
-    try:
-        async with get_async_client() as client:
-            resp = await client.get(
-                GET_ALL_VENDOR_LOCATION_PATH,
-                params=params,
-                headers=headers,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except Exception:
-        return None
-    items = _normalize_vendor_location_response(data)
-    want = (vendor_code or "").strip()
-    for raw in items:
-        if not isinstance(raw, dict):
-            continue
-        header = (
-            raw.get("vendorLocationHeaderDetails")
-            or raw.get("VendorLocationHeaderDetails")
-            or {}
-        )
-        vc = (
-            header.get("vendorCode")
-            or header.get("VendorCode")
-            or raw.get("vendorCode")
-            or raw.get("VendorCode")
-            or ""
-        )
-        if (vc or "").strip() != want:
-            continue
-        trans = (
-            raw.get("vendorLocationTransmissionDetail")
-            or raw.get("VendorLocationTransmissionDetail")
-            or {}
-        )
-        acc = trans.get("accountNumber") or trans.get("AccountNumber")
-        if acc is not None and str(acc).strip():
-            return str(acc).strip()
-        return None
-    return None
 
 
 def _get_zone(tz_name: str | None):
@@ -400,157 +310,24 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
         per_location_valid_lines.append(valid_lines)
         per_location_expected_dates.append(loc_expected)
 
-    order_numbers = []
     now_utc = datetime.now(timezone.utc)
     if submit_immediately:
-        # Activate alternate primary for products with temp_activate_alt_primary (before VO)
-        locations_to_activate_alt_primary = []
-        for i, loc_code in enumerate(body.location_codes):
-            valid_lines = (
-                per_location_valid_lines[i]
-                if i < len(per_location_valid_lines)
-                else valid_lines_default
-            )
-            alt_primary_products = [
-                (li.product_number or "").strip()
-                for li in valid_lines
-                if getattr(li, "temp_activate_alt_primary", False)
-                and (li.product_number or "").strip()
-            ]
-            if alt_primary_products:
-                locations_to_activate_alt_primary.append(
-                    (loc_code, alt_primary_products)
-                )
-        for loc_code, product_numbers in locations_to_activate_alt_primary:
-            ok, status, msg = await asyncio.to_thread(
-                save_location_product_pricing_alt_primary_sync,
-                loc_code,
-                product_numbers,
-                "Y",
-            )
-            if not ok:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Crunchtime saveLocationProductPricing (activate alternate primary) failed for location {loc_code}: status={status} {msg[:300]}",
-                )
-        if locations_to_activate_alt_primary:
-            await asyncio.sleep(VO_ACTIVATE_DELAY_SECONDS)
+        return await run_immediate_submit(
+            body,
+            payloads,
+            per_location_valid_lines,
+            per_location_expected_dates,
+            valid_lines_default,
+            per_location_order_utc,
+            now_utc,
+        )
 
-        # Activate VO for products with temp_activate_vo (one call per location with such products)
-        locations_to_activate = []
-        for i, loc_code in enumerate(body.location_codes):
-            valid_lines = (
-                per_location_valid_lines[i]
-                if i < len(per_location_valid_lines)
-                else valid_lines_default
-            )
-            vo_products = [
-                (li.product_number or "").strip()
-                for li in valid_lines
-                if getattr(li, "temp_activate_vo", False)
-                and (li.product_number or "").strip()
-            ]
-            if vo_products:
-                locations_to_activate.append((loc_code, vo_products))
-        for loc_code, product_numbers in locations_to_activate:
-            ok, status, msg = await asyncio.to_thread(
-                save_location_product_pricing_sync,
-                loc_code,
-                product_numbers,
-                "Y",
-            )
-            if not ok:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Crunchtime saveLocationProductPricing (activate) failed for location {loc_code}: status={status} {msg[:300]}",
-                )
-        if locations_to_activate:
-            await asyncio.sleep(VO_ACTIVATE_DELAY_SECONDS)
+    order_numbers = []
 
-        token = service_token("purchaseorder")
-        headers = {
-            **ct_headers(token_override=token),
-            "accept": "application/json",
-            "content-type": "application/json",
-        }
-        try:
-            async with get_async_client() as client:
-                tasks = [
-                    client.post(
-                        SAVE_PURCHASE_ORDERS_PATH, json=payload, headers=headers
-                    )
-                    for payload in payloads
-                ]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-        except httpx.HTTPError as e:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Crunchtime request failed: {e!s}",
-            )
+    # For scheduled: use user-selected time (UTC).
+    set_order_utc = order_dt.astimezone(timezone.utc)
 
-        for i, r in enumerate(results):
-            loc_code = body.location_codes[i]
-
-            # Narrow type for Pyright: gather(return_exceptions=True) can return BaseException
-            if isinstance(r, BaseException):
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Crunchtime request failed for location {loc_code}: {r!s}",
-                )
-
-            # From here, r is an httpx.Response
-            if r.status_code != 200:
-                detail = (
-                    f"Crunchtime savePurchaseOrders failed for location {loc_code}."
-                )
-                if r.text:
-                    detail = f"{detail} {r.text[:500]}"
-                raise HTTPException(status_code=502, detail=detail)
-
-            try:
-                data = r.json()
-                if (
-                    isinstance(data, list)
-                    and len(data) > 0
-                    and isinstance(data[0], dict)
-                    and "orderNumber" in data[0]
-                ):
-                    order_numbers.append(str(data[0]["orderNumber"]))
-                elif isinstance(data, dict) and "orderNumber" in data:
-                    order_numbers.append(str(data["orderNumber"]))
-                else:
-                    order_numbers.append(None)
-            except Exception as e:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Invalid response from Crunchtime for location {loc_code}: {e!s}",
-                )
-
-        # Deactivate VO for products that were temporarily activated (after PO success)
-        for loc_code, product_numbers in locations_to_activate:
-            await asyncio.to_thread(
-                save_location_product_pricing_sync,
-                loc_code,
-                product_numbers,
-                "N",
-            )
-        # Deactivate alternate primary for products that were temporarily activated
-        for loc_code, product_numbers in locations_to_activate_alt_primary:
-            await asyncio.to_thread(
-                save_location_product_pricing_alt_primary_sync,
-                loc_code,
-                product_numbers,
-                "N",
-            )
-
-    # For immediate: trigger time recorded as actual submit time (UTC). For scheduled: use user-selected time (UTC).
-    if submit_immediately:
-        set_order_utc = now_utc
-    else:
-        set_order_utc = order_dt.astimezone(timezone.utc)
-
-    # Persist to CTH for both immediate and scheduled orders so ALL purchase orders can be reviewed.
-    # Immediate ("Now"): status SUBMITTED, submittedDateTime and transactionNo from Crunchtime response.
+    # Persist to CTH for scheduled orders. Immediate path returns above (DB-first + CrunchTime in run_immediate_submit).
     # Scheduled: status SCHEDULED; scheduler will submit at trigger time and update the row.
     # If persist fails or is skipped, we return an error so the frontend shows it.
     location_details_list = body.location_details or []
@@ -577,10 +354,10 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
             password=PG_PASSWORD,
         )
         cur = conn.cursor()
-        status_val = "SUBMITTED" if submit_immediately else "SCHEDULED"
-        submitted_dt = now_utc if submit_immediately else None
-        submission_attempts_val = 1 if submit_immediately else 0
-        last_attempt_at_val = now_utc if submit_immediately else None
+        status_val = "SCHEDULED"
+        submitted_dt = None
+        submission_attempts_val = 0
+        last_attempt_at_val = None
         for i, loc_code in enumerate(body.location_codes):
             trans_no = (
                 order_numbers[i]
@@ -606,15 +383,13 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                 if i < len(per_location_valid_lines)
                 else valid_lines_default
             )
-            # Use per-location order time when provided and scheduled; else single set_order_utc
             loc_set_order_utc = (
                 per_location_order_utc[i]
-                if not submit_immediately
-                and per_location_order_utc is not None
+                if per_location_order_utc is not None
                 and i < len(per_location_order_utc)
                 else set_order_utc
             )
-            account_number = await _fetch_account_number_for_location(
+            account_number = await fetch_account_number_for_location(
                 loc_code, body.vendor_code
             )
             cur.execute(
@@ -625,8 +400,9 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                     "accountNumber",
                     "createDateTime", "setOrderDateTme", "setExpectedDeliveryDate",
                     "setExpectedDeliveryDOW", "submittedDateTime", "transactionNo",
-                    status, "submission_attempts", "last_attempt_at", "failure_reason", "alert_sent_at"
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    status, "submission_attempts", "last_attempt_at", "failure_reason", "alert_sent_at",
+                    "batch_id"
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING "autoAllocateTransID"
                 """,
                 (
@@ -648,6 +424,7 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
                     status_val,
                     submission_attempts_val,
                     last_attempt_at_val,
+                    None,
                     None,
                     None,
                 ),
@@ -691,17 +468,12 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
             status_code=500,
             detail=(
                 f"Order could not be saved to the database: {e!s}. "
-                "Check backend logs. Ensure CTH.autoAllocationTransHdr exists (run backend/sql/cth_auto_allocation_tables.sql and add_auto_allocation_account_number.sql)."
+                "Check backend logs. Ensure CTH.autoAllocationTransHdr exists (run backend/sql/cth_auto_allocation_tables.sql, add_auto_allocation_account_number.sql, migrate_auto_allocation_batch_and_pending_ct.sql)."
             ),
         )
 
     total_lines = sum(len(v) for v in per_location_valid_lines)
-    if submit_immediately:
-        message = "Order submitted successfully." + (
-            f" Order number(s): {', '.join(order_numbers)}" if order_numbers else ""
-        )
-    else:
-        message = f"Order scheduled for {body.order_date_time} (your local time). It will be sent to the vendor at that time."
+    message = f"Order scheduled for {body.order_date_time} (your local time). It will be sent to the vendor at that time."
     return PurchaseOrderSubmitResponse(
         success=True,
         message=message,
@@ -709,17 +481,28 @@ async def submit_purchase_order(body: PurchaseOrderSubmitRequest):
         expected_delivery_date=body.expected_delivery_date,
         location_count=len(body.location_codes),
         line_count=total_lines,
+        batch_id=None,
+        idempotency_key=None,
     )
 
 
 @router.get("/transactions/filter-options")
 def get_transactions_filter_options():
     """
-    Return distinct values for State, Market, Vendor, Location for use in review page filters.
+    Return distinct values for State, Market, Vendor, Location, and order status for review filters.
+
+    Order status options merge distinct DB values with known header statuses (including CANCELLED)
+    so the dropdown lists them even when no row exists yet for that status.
     """
     conn = _get_pg_connection()
     if not conn:
-        return {"states": [], "markets": [], "vendors": [], "locations": []}
+        return {
+            "states": [],
+            "markets": [],
+            "vendors": [],
+            "locations": [],
+            "statuses": _transaction_status_filter_options([]),
+        }
     try:
         cur = conn.cursor()
         cur.execute(
@@ -742,10 +525,25 @@ def get_transactions_filter_options():
         vendors = [r[0] for r in cur.fetchall()]
         cur.execute(
             """
-            SELECT DISTINCT "locationCode" FROM "CTH"."autoAllocationTransHdr" WHERE "locationCode" IS NOT NULL AND "locationCode" != '' ORDER BY "locationCode"
+            SELECT DISTINCT ON ("locationCode")
+                "locationCode",
+                COALESCE(NULLIF(TRIM("locationName"), ''), "locationCode") AS display_name
+            FROM "CTH"."autoAllocationTransHdr"
+            WHERE "locationCode" IS NOT NULL AND TRIM("locationCode") != ''
+            ORDER BY "locationCode",
+                COALESCE(NULLIF(TRIM("locationName"), ''), "locationCode")
             """
         )
-        locations = [r[0] for r in cur.fetchall()]
+        locations = [{"code": r[0], "name": r[1] or r[0]} for r in cur.fetchall()]
+        locations.sort(key=lambda x: (x["name"] or "").lower())
+        cur.execute(
+            """
+            SELECT DISTINCT status FROM "CTH"."autoAllocationTransHdr"
+            WHERE status IS NOT NULL AND TRIM(status) != ''
+            ORDER BY status
+            """
+        )
+        statuses = _transaction_status_filter_options([r[0] for r in cur.fetchall()])
         cur.close()
         conn.close()
         return {
@@ -753,6 +551,7 @@ def get_transactions_filter_options():
             "markets": markets,
             "vendors": vendors,
             "locations": locations,
+            "statuses": statuses,
         }
     except Exception as e:
         if conn:
@@ -811,23 +610,135 @@ def get_transaction_details(transaction_id: int):
         )
 
 
+@router.patch("/transactions/{transaction_id:int}/cancel")
+def cancel_scheduled_purchase_order(transaction_id: int):
+    """
+    Cancel a scheduled purchase order (status SCHEDULED only). Sets status to CANCELLED;
+    the scheduler ignores CANCELLED rows.
+    """
+    conn = _get_pg_connection()
+    if not conn:
+        raise HTTPException(
+            status_code=503,
+            detail="Database is not configured.",
+        )
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE "CTH"."autoAllocationTransHdr"
+            SET status = 'CANCELLED',
+                "failure_reason" = 'Cancelled by user'
+            WHERE "autoAllocateTransID" = %s
+              AND status = 'SCHEDULED'
+            RETURNING "autoAllocateTransID"
+            """,
+            (transaction_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            cur.close()
+            conn.close()
+            raise HTTPException(
+                status_code=400,
+                detail="Order cannot be cancelled (not found or not in SCHEDULED status).",
+            )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True, "message": "Scheduled order cancelled."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+                conn.close()
+            except Exception:
+                pass
+        logger.exception("PATCH cancel transaction failed: %s", e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to cancel order: {e!s}",
+        )
+
+
+# Known autoAllocationTransHdr.status values (see CTH.autoAllocationTransHdr comment).
+# Merged into filter-options so the dropdown includes e.g. CANCELLED before any such rows exist.
+_KNOWN_TRANSACTION_HDR_STATUSES = frozenset(
+    ("CANCELLED", "FAILED", "PENDING_CT", "SCHEDULED", "SUBMITTED")
+)
+
+
+def _transaction_status_filter_options(from_db: list) -> list[str]:
+    merged: set[str] = set(_KNOWN_TRANSACTION_HDR_STATUSES)
+    for v in from_db:
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s:
+            merged.add(s)
+    return sorted(merged, key=lambda x: x.lower())
+
+
+def _parse_csv_codes(value: str | None) -> list[str]:
+    if not value or not str(value).strip():
+        return []
+    return [p.strip() for p in str(value).split(",") if p.strip()]
+
+
+@router.post("/sync-confirm-receipts")
+async def post_sync_confirm_receipts():
+    """
+    Refresh vendor confirm-receipt from Crunchtime for eligible SUBMITTED rows (last 7 days, not yet confirmed).
+    Runs the same logic as the hourly scheduler job; safe to call from the Review page on load.
+    """
+    return await asyncio.to_thread(run_po_confirm_receipt_sync)
+
+
 @router.get("/transactions")
 def get_transactions(
-    limit: int = Query(100, ge=1, le=500, description="Max rows to return"),
+    limit: int = Query(
+        100,
+        ge=1,
+        le=50000,
+        description="Max rows to return (use a higher value when filters are applied)",
+    ),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     state: str | None = Query(None, description="Filter by state"),
     market: str | None = Query(None, description="Filter by market"),
     vendor_name: str | None = Query(
         None, alias="vendor", description="Filter by vendor name"
     ),
-    location_code: str | None = Query(
-        None, alias="location", description="Filter by location code"
+    location_codes: str | None = Query(
+        None,
+        alias="location_codes",
+        description="Comma-separated location codes (OR match)",
     ),
-    from_date: str | None = Query(
-        None, description="Filter expected delivery from (YYYY-MM-DD)"
+    expected_delivery_from: str | None = Query(
+        None,
+        description="Expected delivery date from (YYYY-MM-DD), inclusive",
     ),
-    to_date: str | None = Query(
-        None, description="Filter expected delivery to (YYYY-MM-DD)"
+    expected_delivery_to: str | None = Query(
+        None,
+        description="Expected delivery date to (YYYY-MM-DD), inclusive",
+    ),
+    set_order_date_from: str | None = Query(
+        None,
+        description="Set submit / order trigger date from (YYYY-MM-DD, UTC date of setOrderDateTme)",
+    ),
+    set_order_date_to: str | None = Query(
+        None,
+        description="Set submit / order trigger date to (YYYY-MM-DD, inclusive, UTC date)",
+    ),
+    submitted_date_from: str | None = Query(
+        None,
+        description="Vendor submitted date from (YYYY-MM-DD, UTC date of submittedDateTime)",
+    ),
+    submitted_date_to: str | None = Query(
+        None,
+        description="Vendor submitted date to (YYYY-MM-DD, inclusive)",
     ),
     po_number: str | None = Query(
         None, alias="po", description="Filter by PO number (partial match)"
@@ -836,10 +747,14 @@ def get_transactions(
         False,
         description="If true, only return orders not yet submitted (status != 'SUBMITTED')",
     ),
+    transaction_status: str | None = Query(
+        None,
+        description="Filter by order status (e.g. SCHEDULED, SUBMITTED, CANCELLED)",
+    ),
 ):
     """
     List Auto Allocation transactions from PostgreSQL (CTH.autoAllocationTransHdr).
-    Default: last 100 rows ordered by primary key desc. Optional filters.
+    Default limit 100 when unfiltered; with filters, callers may request a higher limit (up to 50000).
     Returns one row per transaction with timestamps in ISO UTC (front end converts to local).
     """
     conn = _get_pg_connection()
@@ -867,8 +782,10 @@ def get_transactions(
                 "submittedDateTime",
                 "transactionNo",
                 "confirmReceivedStatus",
+                "confirmRecievedDateTime",
                 status,
-                "alert_sent_at"
+                "alert_sent_at",
+                "batch_id"
             FROM "CTH"."autoAllocationTransHdr"
             WHERE 1=1
         """
@@ -882,18 +799,38 @@ def get_transactions(
         if vendor_name and vendor_name.strip():
             params.append(vendor_name.strip())
             sql += ' AND "vendorName" = %s'
-        if location_code and location_code.strip():
-            params.append(location_code.strip())
-            sql += ' AND "locationCode" = %s'
-        if from_date and from_date.strip():
-            params.append(from_date.strip())
+        loc_codes = _parse_csv_codes(location_codes)
+        if loc_codes:
+            params.append(loc_codes)
+            sql += ' AND "locationCode" = ANY(%s)'
+        if expected_delivery_from and expected_delivery_from.strip():
+            params.append(expected_delivery_from.strip()[:10])
             sql += ' AND "setExpectedDeliveryDate" >= %s'
-        if to_date and to_date.strip():
-            params.append(to_date.strip())
+        if expected_delivery_to and expected_delivery_to.strip():
+            params.append(expected_delivery_to.strip()[:10])
             sql += ' AND "setExpectedDeliveryDate" <= %s'
+        if set_order_date_from and set_order_date_from.strip():
+            params.append(set_order_date_from.strip()[:10])
+            sql += """ AND "setOrderDateTme" IS NOT NULL
+                AND ("setOrderDateTme" AT TIME ZONE 'UTC')::date >= %s::date"""
+        if set_order_date_to and set_order_date_to.strip():
+            params.append(set_order_date_to.strip()[:10])
+            sql += """ AND "setOrderDateTme" IS NOT NULL
+                AND ("setOrderDateTme" AT TIME ZONE 'UTC')::date <= %s::date"""
+        if submitted_date_from and submitted_date_from.strip():
+            params.append(submitted_date_from.strip()[:10])
+            sql += """ AND "submittedDateTime" IS NOT NULL
+                AND ("submittedDateTime" AT TIME ZONE 'UTC')::date >= %s::date"""
+        if submitted_date_to and submitted_date_to.strip():
+            params.append(submitted_date_to.strip()[:10])
+            sql += """ AND "submittedDateTime" IS NOT NULL
+                AND ("submittedDateTime" AT TIME ZONE 'UTC')::date <= %s::date"""
         if po_number and po_number.strip():
             params.append(f"%{po_number.strip()}%")
             sql += ' AND "transactionNo" ILIKE %s'
+        if transaction_status and transaction_status.strip():
+            params.append(transaction_status.strip())
+            sql += " AND status = %s"
         if not_submitted:
             sql += " AND status != 'SUBMITTED'"
         sql += ' ORDER BY (CASE WHEN status = \'SUBMITTED\' THEN 1 ELSE 0 END), "transactionNo" DESC NULLS LAST, "setOrderDateTme" DESC NULLS LAST LIMIT %s OFFSET %s'
@@ -916,6 +853,7 @@ def get_transactions(
                 "setExpectedDeliveryDate",
                 "setOrderDateTme",
                 "submittedDateTime",
+                "confirmRecievedDateTime",
                 "alert_sent_at",
             ):
                 if key in rec and rec[key] is not None:
@@ -924,6 +862,8 @@ def get_transactions(
                         rec[key] = v.isoformat()
                     else:
                         rec[key] = str(v)
+            if rec.get("batch_id") is not None:
+                rec["batch_id"] = str(rec["batch_id"])
             data.append(rec)
         cur.close()
         conn.close()

@@ -72,6 +72,7 @@ def run_scheduled_po_job():
     (last_attempt_at is null or >= 5 min ago). For each: increment attempts,
     call Crunchtime; on success set SUBMITTED, on failure set failure_reason
     and if attempts >= 5 set FAILED.
+    Rows in CANCELLED (or any non-SCHEDULED) status are never selected.
     """
     conn = _get_connection()
     if not conn:

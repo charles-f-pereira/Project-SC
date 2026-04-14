@@ -277,6 +277,7 @@ export default function AutoAllocation() {
   const [pricingBatchLoading, setPricingBatchLoading] = useState(false);
   const MAX_CATALOGUE_SELECT = 10;
   const [submitLoading, setSubmitLoading] = useState(false);
+  const submitLockRef = useRef(false);
   const [submitResult, setSubmitResult] = useState(null);
   const [productSelection, setProductSelection] = useState(new Set());
   const [tempActivateVOSelection, setTempActivateVOSelection] = useState(new Set());
@@ -1263,6 +1264,10 @@ export default function AutoAllocation() {
         })
       : undefined;
     const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    const idempotency_key =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `idem-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
     const payload = {
       order_date_time: orderDateTimeNormalized,
       order_date_time_zone: userTimeZone,
@@ -1274,12 +1279,17 @@ export default function AutoAllocation() {
       vendor_name: vendorName,
       line_items: fallbackLineItems,
       location_line_items,
+      idempotency_key,
       ...(order_date_times !== undefined && { order_date_times }),
     };
 
+    if (submitLockRef.current) return;
+    submitLockRef.current = true;
     try {
       setSubmitLoading(true);
-      const res = await client.post('/api/purchase-orders/submit', payload);
+      const res = await client.post('/api/purchase-orders/submit', payload, {
+        timeout: 300000,
+      });
       setSubmitResult(res.data || { success: true, message: 'Order submitted.' });
     } catch (err) {
       const detail = err.response?.data?.detail;
@@ -1292,6 +1302,7 @@ export default function AutoAllocation() {
       setSubmitResult({ success: false, message: msg });
     } finally {
       setSubmitLoading(false);
+      submitLockRef.current = false;
     }
   };
 

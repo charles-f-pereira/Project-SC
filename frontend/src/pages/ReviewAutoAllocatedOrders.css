@@ -94,7 +94,7 @@
   border: 1px solid #e0e0e0;
   border-radius: 6px;
   margin-bottom: 0;
-  max-height: 400px;
+  max-height: min(70vh, 720px);
   overflow-y: auto;
 }
 
@@ -129,22 +129,14 @@
   vertical-align: middle;
 }
 
-/* Confirmed received: yellow square with black checkmark */
-.review-auto-allocated .td-confirmed-received input[type='checkbox'] {
-  appearance: none;
-  width: 1.25rem;
-  height: 1.25rem;
-  border: 1px solid #000;
-  border-radius: 2px;
-  background: #fff;
-  cursor: default;
+.review-auto-allocated .td-confirmed-received {
+  text-align: center;
   vertical-align: middle;
+  white-space: nowrap;
 }
 
-.review-auto-allocated .td-confirmed-received input[type='checkbox']:checked {
-  background: #ffeb3b
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%23000' d='M13.5 4.5L6 12 2.5 8.5l1-1L6 10l5.5-5.5z'/%3E%3C/svg%3E")
-    center / 75% no-repeat;
+.review-auto-allocated .review-confirmed-placeholder {
+  color: #888;
 }
 
 .review-auto-allocated .empty-table-msg {
@@ -327,4 +319,299 @@
 .po-details-table th {
   background: #f0f0f0;
   font-weight: 600;
+}
+
+.review-filters-date-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.review-date-fieldset {
+  margin: 0;
+  padding: 0.5rem 0.75rem 0.65rem;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+  min-width: 220px;
+}
+
+.review-date-fieldset legend {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #333;
+  padding: 0 0.25rem;
+}
+
+.review-date-pair {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+}
+
+.review-date-pair label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+  color: #555;
+}
+
+.review-date-label {
+  font-weight: 500;
+}
+
+.review-filter-label-location {
+  min-width: 120px;
+  max-width: 200px;
+}
+
+.review-location-dropdown {
+  position: relative;
+}
+
+.review-location-dropdown-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  width: 100%;
+  box-sizing: border-box;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  background: #fff;
+}
+
+.review-location-dropdown-trigger-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-location-dropdown-chevron {
+  flex-shrink: 0;
+  font-size: 0.6rem;
+  line-height: 1;
+  opacity: 0.65;
+}
+
+.review-location-dropdown-panel {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 0.2rem);
+  z-index: 80;
+  width: min(440px, max(100%, 320px));
+  max-width: calc(100vw - 2rem);
+  padding: 0.5rem 0.55rem 0.55rem;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+}
+
+.review-location-filter-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.review-location-dropdown-toolbar {
+  margin-bottom: 0.35rem;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.review-location-dropdown-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 14rem;
+  padding: 0.3rem 0.45rem;
+  font-size: 0.8rem;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
+.review-location-dropdown-search::placeholder {
+  color: #888;
+}
+
+.review-location-dropdown-toolbar .review-location-filter-toolbar-actions {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.review-location-dropdown-apply {
+  padding: 0.25rem 0.65rem;
+  font-size: 0.8rem;
+  line-height: 1.2;
+}
+
+.review-location-filter-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.review-location-toolbar-btn {
+  padding: 0.25rem 0.55rem;
+  font-size: 0.8rem;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  background: #f5f5f5;
+  cursor: pointer;
+  color: #333;
+}
+
+.review-location-toolbar-btn:hover:not(:disabled) {
+  background: #eaeaea;
+}
+
+.review-location-toolbar-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.review-location-table-scroll {
+  min-height: 280px;
+  max-height: min(420px, 52vh);
+  overflow: auto;
+  border: 1px solid #c8c8c8;
+  border-radius: 2px;
+  background: #fff;
+}
+
+.review-location-table-scroll--dropdown {
+  min-height: 200px;
+  max-height: min(360px, 42vh);
+}
+
+.review-location-empty {
+  margin: 0;
+  padding: 0.75rem;
+  font-size: 0.85rem;
+  color: #888;
+  font-style: italic;
+}
+
+.review-location-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  table-layout: fixed;
+}
+
+.review-location-table th,
+.review-location-table td {
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+  border: 1px solid #c8c8c8;
+  vertical-align: middle;
+}
+
+.review-location-table thead th {
+  background: #f0f0f0;
+  font-weight: 600;
+  color: #333;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  box-shadow: 0 1px 0 #c8c8c8;
+}
+
+.review-location-th-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.review-location-th-check,
+.review-location-td-check {
+  width: 2.25rem;
+  text-align: center;
+}
+
+.review-location-td-check input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.review-location-th-code,
+.review-location-td-code {
+  width: 6.5rem;
+  font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+  font-size: 0.82rem;
+  letter-spacing: 0.02em;
+  color: #333;
+  white-space: nowrap;
+}
+
+.review-location-th-name,
+.review-location-td-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #111;
+}
+
+.review-location-data-row:hover {
+  background: #f5f9ff;
+}
+
+.review-filter-label-wide {
+  flex: 1;
+  min-width: 200px;
+}
+
+.review-filter-label-wide .review-filter-input {
+  min-width: 200px;
+  width: 100%;
+  max-width: 400px;
+}
+
+.review-bulk-cancel-btn {
+  border-color: #c62828;
+  color: #c62828;
+  background: #fff;
+}
+
+.review-bulk-cancel-btn:hover:not(:disabled) {
+  background: #ffebee;
+}
+
+.review-bulk-cancel-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.review-auto-allocated .td-select {
+  text-align: center;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.review-select-placeholder {
+  color: #bbb;
+  font-size: 0.9rem;
 }

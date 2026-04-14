@@ -78,6 +78,11 @@ class PurchaseOrderSubmitRequest(BaseModel):
         None,
         description="Per-location line items (one list per location, same order as location_codes). If provided, overrides line_items per location.",
     )
+    idempotency_key: Optional[str] = Field(
+        None,
+        max_length=128,
+        description="Client-generated UUID for immediate submit; prevents duplicate CrunchTime calls on retry.",
+    )
 
 
 class PurchaseOrderSubmitResponse(BaseModel):
@@ -89,4 +94,9 @@ class PurchaseOrderSubmitResponse(BaseModel):
     expected_delivery_date: str | None = None
     location_count: int = 0
     line_count: int = 0
-    # When Crunchtime savePurchaseOrders is integrated, add e.g. reference_number, ct_response, etc.
+    batch_id: Optional[str] = Field(
+        None, description="Submit batch UUID (immediate submits only)"
+    )
+    idempotency_key: Optional[str] = Field(
+        None, description="Echo of client idempotency key when applicable"
+    )

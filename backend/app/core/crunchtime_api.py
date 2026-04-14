@@ -6,6 +6,7 @@ from .config import (
     AUTH_TOKEN,
     BASE_URL,
     COMPANY_PRODUCT_ENHANCED_TOKEN,
+    CONFIRM_RECEIPT_STANDARD_TOKEN,
     CRUNCHTIME_CATEGORY_TOKEN,
     HIERARCHY_TOKEN,
     LOCATION_PRODUCT_PRICING_TOKEN,
@@ -59,6 +60,18 @@ def service_token(service_key: str | None) -> str:
             "purchaseorders": _require(PURCHASE_ORDERS_TOKEN, "PURCHASE_ORDERS_TOKEN")
             if PURCHASE_ORDERS_TOKEN
             else auth,
+            "confirmreceiptstandard": (
+                _require(
+                    CONFIRM_RECEIPT_STANDARD_TOKEN,
+                    "CRUNCHTIME_CONFIRM_RECEIPT_STANDARD_TOKEN_*",
+                )
+                if CONFIRM_RECEIPT_STANDARD_TOKEN
+                else (
+                    _require(PURCHASE_ORDERS_TOKEN, "PURCHASE_ORDERS_TOKEN")
+                    if PURCHASE_ORDERS_TOKEN
+                    else auth
+                )
+            ),
             "category": CRUNCHTIME_CATEGORY_TOKEN or auth,
             "categories": CRUNCHTIME_CATEGORY_TOKEN or auth,
             "locationproductpricing": LOCATION_PRODUCT_PRICING_TOKEN or auth,

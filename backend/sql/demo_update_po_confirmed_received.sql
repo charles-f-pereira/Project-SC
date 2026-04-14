@@ -14,7 +14,7 @@ WITH ordered AS (
 UPDATE "CTH"."autoAllocationTransHdr" h
 SET
   "transactionNo"       = 'PO' || (970419 + o.rn),
-  "confirmReceivedStatus" = 'Received',
+  "confirmReceivedStatus" = TRUE,
   "confirmRecievedDateTime" = now()
 FROM ordered o
 WHERE h."autoAllocateTransID" = o."autoAllocateTransID";
